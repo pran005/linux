@@ -2835,6 +2835,18 @@ poll_done:
 	return work_done;
 }
 
+static void *bnxt_alloc_coherent(struct bnxt *bp, unsigned long size,
+				 dma_addr_t *dma, gfp_t gfp)
+{
+	return dma_alloc_coherent(&bp->pdev->dev, size, dma, gfp);
+}
+
+static void bnxt_free_coherent(struct bnxt *bp, unsigned long size,
+			       void *addr, dma_addr_t dma)
+{
+	return dma_free_coherent(&bp->pdev->dev, size, addr, dma);
+}
+
 static void bnxt_free_tx_skbs(struct bnxt *bp)
 {
 	int i, max_idx;
@@ -3031,7 +3043,6 @@ static void bnxt_init_ctx_mem(struct bnxt_mem_init *mem_init, void *p, int len)
 
 static void bnxt_free_ring(struct bnxt *bp, struct bnxt_ring_mem_info *rmem)
 {
-	struct pci_dev *pdev = bp->pdev;
 	int i;
 
 	if (!rmem->pg_arr)
@@ -3041,8 +3052,8 @@ static void bnxt_free_ring(struct bnxt *bp, struct bnxt_ring_mem_info *rmem)
 		if (!rmem->pg_arr[i])
 			continue;
 
-		dma_free_coherent(&pdev->dev, rmem->page_size,
-				  rmem->pg_arr[i], rmem->dma_arr[i]);
+		bnxt_free_coherent(bp, rmem->page_size,
+				   rmem->pg_arr[i], rmem->dma_arr[i]);
 
 		rmem->pg_arr[i] = NULL;
 	}
@@ -3052,8 +3063,8 @@ skip_pages:
 
 		if (rmem->flags & BNXT_RMEM_USE_FULL_PAGE_FLAG)
 			pg_tbl_size = rmem->page_size;
-		dma_free_coherent(&pdev->dev, pg_tbl_size,
-				  rmem->pg_tbl, rmem->pg_tbl_map);
+		bnxt_free_coherent(bp, pg_tbl_size,
+				   rmem->pg_tbl, rmem->pg_tbl_map);
 		rmem->pg_tbl = NULL;
 	}
 	if (rmem->vmem_size && *rmem->vmem) {
@@ -3064,7 +3075,6 @@ skip_pages:
 
 static int bnxt_alloc_ring(struct bnxt *bp, struct bnxt_ring_mem_info *rmem)
 {
-	struct pci_dev *pdev = bp->pdev;
 	u64 valid_bit = 0;
 	int i;
 
@@ -3075,7 +3085,7 @@ static int bnxt_alloc_ring(struct bnxt *bp, struct bnxt_ring_mem_info *rmem)
 
 		if (rmem->flags & BNXT_RMEM_USE_FULL_PAGE_FLAG)
 			pg_tbl_size = rmem->page_size;
-		rmem->pg_tbl = dma_alloc_coherent(&pdev->dev, pg_tbl_size,
+		rmem->pg_tbl = bnxt_alloc_coherent(bp, pg_tbl_size,
 						  &rmem->pg_tbl_map,
 						  GFP_KERNEL);
 		if (!rmem->pg_tbl)
@@ -3085,7 +3095,7 @@ static int bnxt_alloc_ring(struct bnxt *bp, struct bnxt_ring_mem_info *rmem)
 	for (i = 0; i < rmem->nr_pages; i++) {
 		u64 extra_bits = valid_bit;
 
-		rmem->pg_arr[i] = dma_alloc_coherent(&pdev->dev,
+		rmem->pg_arr[i] = bnxt_alloc_coherent(bp,
 						     rmem->page_size,
 						     &rmem->dma_arr[i],
 						     GFP_KERNEL);
@@ -3286,7 +3296,6 @@ static int bnxt_alloc_rx_rings(struct bnxt *bp)
 static void bnxt_free_tx_rings(struct bnxt *bp)
 {
 	int i;
-	struct pci_dev *pdev = bp->pdev;
 
 	if (!bp->tx_ring)
 		return;
@@ -3296,8 +3305,8 @@ static void bnxt_free_tx_rings(struct bnxt *bp)
 		struct bnxt_ring_struct *ring;
 
 		if (txr->tx_push) {
-			dma_free_coherent(&pdev->dev, bp->tx_push_size,
-					  txr->tx_push, txr->tx_push_mapping);
+			bnxt_free_coherent(bp, bp->tx_push_size,
+					   txr->tx_push, txr->tx_push_mapping);
 			txr->tx_push = NULL;
 		}
 
@@ -3310,7 +3319,6 @@ static void bnxt_free_tx_rings(struct bnxt *bp)
 static int bnxt_alloc_tx_rings(struct bnxt *bp)
 {
 	int i, j, rc;
-	struct pci_dev *pdev = bp->pdev;
 
 	bp->tx_push_size = 0;
 	if (bp->tx_push_thresh) {
@@ -3345,7 +3353,7 @@ static int bnxt_alloc_tx_rings(struct bnxt *bp)
 			/* One pre-allocated DMA buffer to backup
 			 * TX push operation
 			 */
-			txr->tx_push = dma_alloc_coherent(&pdev->dev,
+			txr->tx_push = bnxt_alloc_coherent(bp,
 						bp->tx_push_size,
 						&txr->tx_push_mapping,
 						GFP_KERNEL);
@@ -4021,7 +4029,6 @@ static void bnxt_free_vnic_attributes(struct bnxt *bp)
 {
 	int i;
 	struct bnxt_vnic_info *vnic;
-	struct pci_dev *pdev = bp->pdev;
 
 	if (!bp->vnic_info)
 		return;
@@ -4036,15 +4043,15 @@ static void bnxt_free_vnic_attributes(struct bnxt *bp)
 		vnic->uc_list = NULL;
 
 		if (vnic->mc_list) {
-			dma_free_coherent(&pdev->dev, vnic->mc_list_size,
-					  vnic->mc_list, vnic->mc_list_mapping);
+			bnxt_free_coherent(bp, vnic->mc_list_size,
+					   vnic->mc_list, vnic->mc_list_mapping);
 			vnic->mc_list = NULL;
 		}
 
 		if (vnic->rss_table) {
-			dma_free_coherent(&pdev->dev, vnic->rss_table_size,
-					  vnic->rss_table,
-					  vnic->rss_table_dma_addr);
+			bnxt_free_coherent(bp, vnic->rss_table_size,
+					   vnic->rss_table,
+					   vnic->rss_table_dma_addr);
 			vnic->rss_table = NULL;
 		}
 
@@ -4057,7 +4064,6 @@ static int bnxt_alloc_vnic_attributes(struct bnxt *bp)
 {
 	int i, rc = 0, size;
 	struct bnxt_vnic_info *vnic;
-	struct pci_dev *pdev = bp->pdev;
 	int max_rings;
 
 	for (i = 0; i < bp->nr_vnics; i++) {
@@ -4078,7 +4084,7 @@ static int bnxt_alloc_vnic_attributes(struct bnxt *bp)
 		if (vnic->flags & BNXT_VNIC_MCAST_FLAG) {
 			vnic->mc_list_size = BNXT_MAX_MC_ADDRS * ETH_ALEN;
 			vnic->mc_list =
-				dma_alloc_coherent(&pdev->dev,
+				bnxt_alloc_coherent(bp,
 						   vnic->mc_list_size,
 						   &vnic->mc_list_mapping,
 						   GFP_KERNEL);
@@ -4112,7 +4118,7 @@ vnic_skip_grps:
 			size = L1_CACHE_ALIGN(BNXT_MAX_RSS_TABLE_SIZE_P5);
 
 		vnic->rss_table_size = size + HW_HASH_KEY_SIZE;
-		vnic->rss_table = dma_alloc_coherent(&pdev->dev,
+		vnic->rss_table = bnxt_alloc_coherent(bp,
 						     vnic->rss_table_size,
 						     &vnic->rss_table_dma_addr,
 						     GFP_KERNEL);
@@ -4163,8 +4169,8 @@ static void bnxt_free_stats_mem(struct bnxt *bp, struct bnxt_stats_mem *stats)
 	kfree(stats->sw_stats);
 	stats->sw_stats = NULL;
 	if (stats->hw_stats) {
-		dma_free_coherent(&bp->pdev->dev, stats->len, stats->hw_stats,
-				  stats->hw_stats_map);
+		bnxt_free_coherent(bp, stats->len, stats->hw_stats,
+				   stats->hw_stats_map);
 		stats->hw_stats = NULL;
 	}
 }
@@ -4172,8 +4178,8 @@ static void bnxt_free_stats_mem(struct bnxt *bp, struct bnxt_stats_mem *stats)
 static int bnxt_alloc_stats_mem(struct bnxt *bp, struct bnxt_stats_mem *stats,
 				bool alloc_masks)
 {
-	stats->hw_stats = dma_alloc_coherent(&bp->pdev->dev, stats->len,
-					     &stats->hw_stats_map, GFP_KERNEL);
+	stats->hw_stats = bnxt_alloc_coherent(bp, stats->len,
+					      &stats->hw_stats_map, GFP_KERNEL);
 	if (!stats->hw_stats)
 		return -ENOMEM;
 
