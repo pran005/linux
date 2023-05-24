@@ -248,6 +248,8 @@ struct gve_rx_ring {
 	u32 mask; /* masks the cnt and fill_cnt to the size of the ring */
 	u64 rx_hsplit_pkt; /* free-running packets with headers split */
 	u64 rx_hsplit_hbo_pkt; /* free-running packets with header buffer overflow */
+	u64 rx_devmem_pkt; /* devmem packets processed */
+	u64 rx_devmem_dropped; /* devmem pkts dropped */
 	u64 rx_copybreak_pkt; /* free-running count of copybreak packets */
 	u64 rx_copied_pkt; /* free-running total number of copied packets */
 	u64 rx_skb_alloc_fail; /* free-running count of skb alloc fails */

@@ -40,10 +40,10 @@ static u32 gve_get_msglevel(struct net_device *netdev)
  * as declared in enum xdp_action inside file uapi/linux/bpf.h .
  */
 static const char gve_gstrings_main_stats[][ETH_GSTRING_LEN] = {
-	"rx_packets", "rx_packets_sph", "rx_packets_hbo", "tx_packets",
-	"rx_bytes", "tx_bytes", "rx_dropped", "tx_dropped", "tx_timeouts",
-	"rx_skb_alloc_fail", "rx_buf_alloc_fail", "rx_desc_err_dropped_pkt",
-	"rx_hsplit_err_dropped_pkt",
+	"rx_packets", "rx_packets_sph", "rx_packets_hbo", "rx_devmem_pkts",
+	"rx_devmem_dropped", "tx_packets", "rx_bytes", "tx_bytes", "rx_dropped",
+	"tx_dropped", "tx_timeouts", "rx_skb_alloc_fail", "rx_buf_alloc_fail",
+	"rx_desc_err_dropped_pkt", "rx_hsplit_err_dropped_pkt",
 	"interface_up_cnt", "interface_down_cnt", "reset_cnt",
 	"page_alloc_fail", "dma_mapping_error", "stats_report_trigger_cnt",
 };
@@ -158,12 +158,15 @@ static void
 gve_get_ethtool_stats(struct net_device *netdev,
 		      struct ethtool_stats *stats, u64 *data)
 {
-	u64 tmp_rx_pkts, tmp_rx_pkts_sph, tmp_rx_pkts_hbo, tmp_rx_bytes,
+	u64 tmp_rx_pkts, tmp_rx_pkts_sph, tmp_rx_pkts_hbo, tmp_rx_devmem_pkt,
+		tmp_rx_devmem_dropped, tmp_rx_bytes,
 		tmp_rx_hbytes, tmp_rx_skb_alloc_fail, tmp_rx_buf_alloc_fail,
 		tmp_rx_desc_err_dropped_pkt, tmp_rx_hsplit_err_dropped_pkt,
 		tmp_tx_pkts, tmp_tx_bytes;
+
 	u64 rx_buf_alloc_fail, rx_desc_err_dropped_pkt, rx_hsplit_err_dropped_pkt,
-		rx_pkts, rx_pkts_sph, rx_pkts_hbo, rx_skb_alloc_fail, rx_bytes,
+		rx_pkts, rx_pkts_sph, rx_pkts_hbo, rx_devmem_pkt, rx_devmem_dropped,
+		rx_skb_alloc_fail, rx_bytes,
 		tx_pkts, tx_bytes, tx_dropped;
 	int stats_idx, base_stats_idx, max_stats_idx;
 	struct stats *report_stats;
@@ -192,6 +195,7 @@ gve_get_ethtool_stats(struct net_device *netdev,
 		return;
 	}
 	for (rx_pkts = 0, rx_bytes = 0, rx_pkts_sph = 0, rx_pkts_hbo = 0,
+	     rx_devmem_pkt = 0, rx_devmem_dropped = 0,
 	     rx_skb_alloc_fail = 0, rx_buf_alloc_fail = 0,
 	     rx_desc_err_dropped_pkt = 0, rx_hsplit_err_dropped_pkt = 0,
 	     ring = 0;
@@ -205,6 +209,8 @@ gve_get_ethtool_stats(struct net_device *netdev,
 				tmp_rx_pkts = rx->rpackets;
 				tmp_rx_pkts_sph = rx->rx_hsplit_pkt;
 				tmp_rx_pkts_hbo = rx->rx_hsplit_hbo_pkt;
+				tmp_rx_devmem_pkt = rx->rx_devmem_pkt;
+				tmp_rx_devmem_dropped = rx->rx_devmem_dropped;
 				tmp_rx_bytes = rx->rbytes;
 				tmp_rx_skb_alloc_fail = rx->rx_skb_alloc_fail;
 				tmp_rx_buf_alloc_fail = rx->rx_buf_alloc_fail;
@@ -217,6 +223,8 @@ gve_get_ethtool_stats(struct net_device *netdev,
 			rx_pkts += tmp_rx_pkts;
 			rx_pkts_sph += tmp_rx_pkts_sph;
 			rx_pkts_hbo += tmp_rx_pkts_hbo;
+			rx_devmem_pkt += tmp_rx_devmem_pkt;
+			rx_devmem_dropped += tmp_rx_devmem_dropped;
 			rx_bytes += tmp_rx_bytes;
 			rx_skb_alloc_fail += tmp_rx_skb_alloc_fail;
 			rx_buf_alloc_fail += tmp_rx_buf_alloc_fail;
@@ -244,6 +252,8 @@ gve_get_ethtool_stats(struct net_device *netdev,
 	data[i++] = rx_pkts;
 	data[i++] = rx_pkts_sph;
 	data[i++] = rx_pkts_hbo;
+	data[i++] = rx_devmem_pkt;
+	data[i++] = rx_devmem_dropped;
 	data[i++] = tx_pkts;
 	data[i++] = rx_bytes;
 	data[i++] = tx_bytes;
