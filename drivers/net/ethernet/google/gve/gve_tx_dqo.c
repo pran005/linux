@@ -513,7 +513,8 @@ static int gve_tx_add_skb_no_copy_dqo(struct gve_tx_ring *tx,
 		u32 len = skb_frag_size(frag);
 		dma_addr_t addr;
 
-		addr = skb_frag_dma_map(tx->dev, frag, 0, len, DMA_TO_DEVICE);
+		addr = skb_devmem_frag_dma_map(tx->dev, skb, frag, 0, len,
+					       DMA_TO_DEVICE);
 		if (unlikely(dma_mapping_error(tx->dev, addr)))
 			goto err;
 

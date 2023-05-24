@@ -12,6 +12,7 @@
 #include <linux/ipv6.h>
 #include <linux/skbuff.h>
 #include <linux/slab.h>
+#include <linux/dma-buf.h>
 #include <net/ip6_checksum.h>
 #include <net/ipv6.h>
 #include <net/tcp.h>
@@ -159,14 +160,50 @@ gve_get_recycled_buf_state(struct gve_rx_ring *rx)
 }
 
 static int gve_alloc_page_dqo(struct gve_priv *priv,
-			      struct gve_rx_buf_state_dqo *buf_state)
+			      struct gve_rx_buf_state_dqo *buf_state,
+			      struct gve_rx_ring *rx)
 {
+	struct netdev_rx_queue *rxq = NULL;
+	struct scatterlist sgl;
+	int num_pages_mapped;
 	int err;
 
-	err = gve_alloc_page(priv, &priv->pdev->dev, &buf_state->page_info.page,
-			     &buf_state->addr, DMA_FROM_DEVICE, GFP_ATOMIC);
-	if (err)
-		return err;
+	if (rx)
+		rxq = __netif_get_rx_queue(priv->dev, rx->q_num);
+
+	if (rxq && unlikely(rcu_access_pointer(rxq->dmabuf_pages))) {
+		buf_state->page_info.page =
+			page_pool_alloc_pages(rx->dqo.pp, GFP_KERNEL);
+
+		if (!buf_state->page_info.page) {
+			priv->page_alloc_fail++;
+			return -ENOMEM;
+		}
+
+		BUG_ON(!is_dma_buf_page(buf_state->page_info.page));
+
+		sgl.offset = 0;
+		sgl.length = PAGE_SIZE;
+		sgl.page_link = (unsigned long)buf_state->page_info.page;
+		num_pages_mapped = dma_buf_map_sg(&priv->pdev->dev, &sgl, 1,
+						  DMA_FROM_DEVICE);
+		if (!num_pages_mapped) {
+			net_err_ratelimited(
+				"dma_buf_map_sg failed (num_mapped (%d) <= 0)\n",
+				num_pages_mapped);
+			put_page(buf_state->page_info.page);
+			return -ENOMEM;
+		}
+		buf_state->addr = sgl.dma_address;
+	} else {
+		err = gve_alloc_page(priv, &priv->pdev->dev,
+				     &buf_state->page_info.page,
+				     &buf_state->addr, DMA_FROM_DEVICE,
+				     GFP_ATOMIC);
+
+		if (err)
+			return err;
+	}
 
 	buf_state->page_info.page_offset = 0;
 	buf_state->page_info.page_address =
@@ -244,6 +281,7 @@ static int gve_rx_alloc_ring_dqo(struct gve_priv *priv, int idx)
 	struct device *hdev = &priv->pdev->dev;
 	size_t size;
 	int i;
+	struct netdev_rx_queue *rxq = NULL;
 
 	const u32 buffer_queue_slots =
 		priv->options_dqo_rda.rx_buff_ring_entries;
@@ -282,6 +320,26 @@ static int gve_rx_alloc_ring_dqo(struct gve_priv *priv, int idx)
 			if (!rx->dqo.hdr_bufs[i].data)
 				goto err;
 		}
+	}
+
+	rxq = __netif_get_rx_queue(priv->dev, rx->q_num);
+	if (rxq && unlikely(rcu_access_pointer(rxq->dmabuf_pages))) {
+		get_file(rxq->dmabuf_pages);
+
+		/* Create a page_pool and register it with rxq */
+		struct page_pool_params pp_params = { 0 };
+		struct dma_buf_pages *mp_priv = rxq->dmabuf_pages->private_data;
+
+		pp_params.order			= 0;
+		pp_params.pool_size		= buffer_queue_slots;
+		pp_params.nid			= NUMA_NO_NODE;
+		pp_params.dev			= &priv->dev->dev;
+		pp_params.memory_provider	= PP_MP_DMABUF_DEVMEM;
+		pp_params.mp_priv		= mp_priv;
+
+		rx->dqo.pp = page_pool_create(&pp_params);
+		if (IS_ERR(rx->dqo.pp))
+			BUG();
 	}
 
 	/* Set up linked list of buffer IDs */
@@ -400,7 +458,7 @@ void gve_rx_post_buffers_dqo(struct gve_rx_ring *rx)
 			if (unlikely(!buf_state))
 				break;
 
-			if (unlikely(gve_alloc_page_dqo(priv, buf_state))) {
+			if (unlikely(gve_alloc_page_dqo(priv, buf_state, rx))) {
 				u64_stats_update_begin(&rx->statss);
 				rx->rx_buf_alloc_fail++;
 				u64_stats_update_end(&rx->statss);
@@ -624,6 +682,24 @@ static int gve_rx_dqo(struct napi_struct *napi, struct gve_rx_ring *rx,
 	 */
 	prefetch(buf_state->page_info.page);
 
+	if (!sph && !rx->ctx.skb_head &&
+	    is_dma_buf_page(buf_state->page_info.page)) {
+		/* !sph indicates the packet is not split, and the header went
+		 * to the packet buffer. If the packet buffer is a dma_buf
+		 * page, those can't be easily mapped into the kernel space to
+		 * access the header required to process the packet.
+		 *
+		 * In the future we may be able to map the dma_buf page to
+		 * kernel space to access the header for dma_buf providers that
+		 * support that, but for now, simply drop the packet. We expect
+		 * the TCP packets that we care about to be header split
+		 * anyway.
+		 */
+		rx->rx_devmem_dropped++;
+		gve_recycle_buf(rx, buf_state);
+		return -EFAULT;
+	}
+
 	/* Copy the header into the skb in the case of header split */
 	if (sph) {
 		dma_sync_single_for_cpu(&priv->pdev->dev,
@@ -659,7 +735,9 @@ static int gve_rx_dqo(struct napi_struct *napi, struct gve_rx_ring *rx,
 		return 0;
 	}
 
-	if (eop && buf_len <= priv->rx_copybreak) {
+	/* We can't copy dma-buf pages. Ignore any copybreak setting. */
+	if (eop && buf_len <= priv->rx_copybreak &&
+	    (!is_dma_buf_page(buf_state->page_info.page) || !buf_len)) {
 		rx->ctx.skb_head = gve_rx_copy(priv->dev, napi,
 					       &buf_state->page_info, buf_len);
 		if (unlikely(!rx->ctx.skb_head))
@@ -745,10 +823,15 @@ static int gve_rx_complete_skb(struct gve_rx_ring *rx, struct napi_struct *napi,
 			return err;
 	}
 
-	if (skb_headlen(rx->ctx.skb_head) == 0)
+	if (skb_headlen(rx->ctx.skb_head) == 0) {
+		if (napi_get_frags(napi)->devmem)
+			rx->rx_devmem_pkt++;
 		napi_gro_frags(napi);
-	else
+	} else {
+		if (rx->ctx.skb_head->devmem)
+			rx->rx_devmem_pkt++;
 		napi_gro_receive(napi, rx->ctx.skb_head);
+	}
 
 	return 0;
 }

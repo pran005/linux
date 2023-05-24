@@ -16,6 +16,7 @@
 #include <linux/workqueue.h>
 #include <linux/utsname.h>
 #include <linux/version.h>
+#include <linux/dma-buf.h>
 #include <net/sch_generic.h>
 #include <net/xdp_sock_drv.h>
 #include "gve.h"
@@ -1030,10 +1031,12 @@ static int gve_alloc_queue_page_list(struct gve_priv *priv, u32 id,
 void gve_free_page(struct device *dev, struct page *page, dma_addr_t dma,
 		   enum dma_data_direction dir)
 {
-	if (!dma_mapping_error(dev, dma))
+	if (!is_dma_buf_page(page) && !dma_mapping_error(dev, dma))
 		dma_unmap_page(dev, dma, PAGE_SIZE, dir);
+
 	if (page)
-		put_page(page);
+		is_dma_buf_page(page) ? page_pool_put_full_page :
+					put_page(page);
 }
 
 static void gve_free_queue_page_list(struct gve_priv *priv, u32 id)

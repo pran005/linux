@@ -237,6 +237,8 @@ struct gve_rx_ring {
 
 			/* Array of buffers for header-split */
 			struct gve_header_buf *hdr_bufs;
+
+			struct page_pool *pp;
 		} dqo;
 	};
 
