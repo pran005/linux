@@ -1890,6 +1890,8 @@ struct sockcm_cookie {
 	u64 transmit_time;
 	u32 mark;
 	u32 tsflags;
+	u32 devmem_fd;
+	u32 devmem_offset;
 };
 
 static inline void sockcm_init(struct sockcm_cookie *sockc,

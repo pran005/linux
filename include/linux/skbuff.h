@@ -38,6 +38,7 @@
 #endif
 #include <net/net_debug.h>
 #include <net/dropreason-core.h>
+#include <linux/dma-buf.h>
 
 /**
  * DOC: skb checksums
@@ -1659,8 +1660,8 @@ static inline int skb_zerocopy_iter_dgram(struct sk_buff *skb,
 }
 
 int skb_zerocopy_iter_stream(struct sock *sk, struct sk_buff *skb,
-			     struct msghdr *msg, int len,
-			     struct ubuf_info *uarg);
+			     struct msghdr *msg, struct iov_iter *iov_iter,
+			     int len, struct ubuf_info *uarg);
 
 /* Internal */
 #define skb_shinfo(SKB)	((struct skb_shared_info *)(skb_end_pointer(SKB)))
@@ -3548,6 +3549,21 @@ static inline dma_addr_t skb_frag_dma_map(struct device *dev,
 {
 	return dma_map_page(dev, skb_frag_page(frag),
 			    skb_frag_off(frag) + offset, size, dir);
+}
+
+/* Similar to skb_frag_dma_map, but handles devmem skbs correctly. */
+static inline dma_addr_t skb_devmem_frag_dma_map(struct device *dev,
+						 const struct sk_buff *skb,
+						 const skb_frag_t *frag,
+						 size_t offset, size_t size,
+						 enum dma_data_direction dir)
+{
+	if (unlikely(skb->devmem && is_dma_buf_page(skb_frag_page(frag)))) {
+		dma_addr_t dma_addr =
+			dma_buf_page_to_dma_addr(skb_frag_page(frag));
+		return dma_addr + skb_frag_off(frag) + offset;
+	}
+	return skb_frag_dma_map(dev, frag, offset, size, dir);
 }
 
 static inline struct sk_buff *pskb_copy(struct sk_buff *skb,
