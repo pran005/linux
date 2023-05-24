@@ -455,6 +455,9 @@ static int __skb_datagram_iter(const struct sk_buff *skb, int offset,
 	skb_walk_frags(skb, frag_iter) {
 		int end;
 
+		if (frag_iter->devmem)
+			goto short_copy;
+
 		WARN_ON(start > offset + len);
 
 		end = start + frag_iter->len;
