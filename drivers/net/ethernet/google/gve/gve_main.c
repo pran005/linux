@@ -557,6 +557,7 @@ static void gve_teardown_device_resources(struct gve_priv *priv)
 
 	/* Tell device its resources are being freed */
 	if (gve_get_device_resources_ok(priv)) {
+		gve_flow_rules_reset(priv);
 		/* detach the stats report */
 		err = gve_adminq_report_stats(priv, 0, 0x0, GVE_STATS_REPORT_TIMER_PERIOD);
 		if (err) {
@@ -1868,6 +1869,7 @@ static int gve_adjust_config(struct gve_priv *priv,
 			     struct gve_tx_alloc_rings_cfg *tx_alloc_cfg,
 			     struct gve_rx_alloc_rings_cfg *rx_alloc_cfg)
 {
+	struct gve_queue_config old_rx_config = priv->rx_cfg;
 	int err;
 
 	/* Allocate resources for the new confiugration */
@@ -1889,6 +1891,12 @@ static int gve_adjust_config(struct gve_priv *priv,
 		return err;
 	}
 
+	if (old_rx_config.num_queues != rx_alloc_cfg->qcfg->num_queues) {
+		err = gve_flow_rules_reset(priv);
+		if (err)
+			return err;
+	}
+
 	/* Bring the device back up again with the new resources. */
 	err = gve_queues_start(priv, qpls_alloc_cfg,
 			       tx_alloc_cfg, rx_alloc_cfg);
@@ -1902,6 +1910,26 @@ static int gve_adjust_config(struct gve_priv *priv,
 		return err;
 	}
 
+	return 0;
+}
+
+int gve_flow_rules_reset(struct gve_priv *priv)
+{
+	struct gve_flow_rule *cur, *next;
+	int err;
+
+	if (priv->flow_rules_cnt == 0)
+		return 0;
+
+	err = gve_adminq_reset_flow_rules(priv);
+	if (err)
+		return err;
+
+	list_for_each_entry_safe(cur, next, &priv->flow_rules, list) {
+		list_del(&cur->list);
+		kvfree(cur);
+		priv->flow_rules_cnt--;
+	}
 	return 0;
 }
 
@@ -2143,6 +2171,9 @@ static int gve_set_features(struct net_device *netdev,
 		}
 	}
 
+	if ((netdev->features & NETIF_F_NTUPLE) && !(features & NETIF_F_NTUPLE))
+		gve_flow_rules_reset(priv);
+
 	return 0;
 }
 
@@ -2345,6 +2376,9 @@ static int gve_init_priv(struct gve_priv *priv, bool skip_describe_device)
 	 */
 	priv->num_ntfy_blks = (num_ntfy - 1) & ~0x1;
 	priv->mgmt_msix_idx = priv->num_ntfy_blks;
+
+	spin_lock_init(&priv->flow_rules_lock);
+	INIT_LIST_HEAD(&priv->flow_rules);
 
 	priv->tx_cfg.max_queues =
 		min_t(int, priv->tx_cfg.max_queues, priv->num_ntfy_blks / 2);
