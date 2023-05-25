@@ -671,6 +671,7 @@ static void gve_teardown_device_resources(struct gve_priv *priv)
 	priv->ptype_lut_dqo = NULL;
 
 	gve_free_flow_rule_caches(priv);
+	gve_rss_config_release(&priv->rss_config);
 	gve_free_counter_array(priv);
 	gve_free_notify_blocks(priv);
 	gve_free_stats_report(priv);
@@ -1824,6 +1825,12 @@ int gve_adjust_config(struct gve_priv *priv,
 		err = gve_flow_rules_reset(priv);
 		if (err)
 			return err;
+
+		if (priv->rss_config.alg != GVE_RSS_HASH_UNDEFINED) {
+			err = gve_rss_config_init(priv);
+			if (err)
+				return err;
+		}
 	}
 
 	/* Bring the device back up again with the new resources. */
@@ -2839,6 +2846,53 @@ static int gve_resume(struct pci_dev *pdev)
 	return err;
 }
 #endif /* CONFIG_PM */
+
+void gve_rss_set_default_indir(struct gve_priv *priv)
+{
+	struct gve_rss_config *rss_config = &priv->rss_config;
+	int i;
+
+	for (i = 0; i < GVE_RSS_INDIR_SIZE; i++)
+		rss_config->indir[i] = i % priv->rx_cfg.num_queues;
+}
+
+void gve_rss_config_release(struct gve_rss_config *rss_config)
+{
+	kvfree(rss_config->key);
+	kvfree(rss_config->indir);
+	memset(rss_config, 0, sizeof(*rss_config));
+}
+
+int gve_rss_config_init(struct gve_priv *priv)
+{
+	struct gve_rss_config *rss_config = &priv->rss_config;
+
+	gve_rss_config_release(rss_config);
+
+	rss_config->key = kvzalloc(GVE_RSS_KEY_SIZE, GFP_KERNEL);
+	if (!rss_config->key)
+		goto err;
+
+	netdev_rss_key_fill(rss_config->key, GVE_RSS_KEY_SIZE);
+
+	rss_config->indir = kvcalloc(GVE_RSS_INDIR_SIZE,
+				     sizeof(*rss_config->indir),
+				     GFP_KERNEL);
+	if (!rss_config->indir)
+		goto err;
+
+	rss_config->alg = GVE_RSS_HASH_TOEPLITZ;
+	rss_config->key_size = GVE_RSS_KEY_SIZE;
+	rss_config->indir_size = GVE_RSS_INDIR_SIZE;
+	gve_rss_set_default_indir(priv);
+
+	return gve_adminq_configure_rss(priv, rss_config);
+
+err:
+	kvfree(rss_config->key);
+	rss_config->key = NULL;
+	return -ENOMEM;
+}
 
 static const struct pci_device_id gve_id_table[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_GOOGLE, PCI_DEV_ID_GVNIC) },
