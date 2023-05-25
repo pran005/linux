@@ -56,6 +56,9 @@
 
 #define GVE_DEFAULT_RX_BUFFER_OFFSET 2048
 
+#define GVE_RSS_KEY_SIZE 40
+#define GVE_RSS_INDIR_SIZE 128
+
 #define GVE_XDP_ACTIONS 5
 
 #define GVE_GQ_TX_MIN_PKT_DESC_BYTES 182
@@ -689,6 +692,19 @@ struct gve_rx_alloc_rings_cfg {
 	struct gve_rx_ring *rx;
 };
 
+enum gve_rss_hash_alg {
+	GVE_RSS_HASH_UNDEFINED = 0,
+	GVE_RSS_HASH_TOEPLITZ = 1,
+};
+
+struct gve_rss_config {
+	enum gve_rss_hash_alg alg;
+	u16 key_size;
+	u16 indir_size;
+	u8 *key;
+	u32 *indir;
+};
+
 /* GVE_QUEUE_FORMAT_UNSPECIFIED must be zero since 0 is the default value
  * when the entire configure_device_resources command is zeroed out and the
  * queue_format is not specified.
@@ -790,6 +806,7 @@ struct gve_priv {
 	u32 adminq_get_ptype_map_cnt;
 	u32 adminq_verify_driver_compatibility_cnt;
 	u32 adminq_cfg_flow_rule_cnt;
+	u32 adminq_cfg_rss_cnt;
 
 	/* Global stats */
 	u32 interface_up_cnt; /* count of times interface turned up since last reset */
@@ -841,6 +858,9 @@ struct gve_priv {
 	u16 flow_rules_cnt;
 	struct list_head flow_rules;
 	spinlock_t flow_rules_lock;
+
+	/* RSS configuration */
+	struct gve_rss_config rss_config;
 };
 
 enum gve_service_task_flags_bit {
@@ -1191,6 +1211,12 @@ int gve_flow_rules_reset(struct gve_priv *priv);
 
 /* report stats handling */
 void gve_handle_report_stats(struct gve_priv *priv);
+
+/* RSS support */
+int gve_rss_config_init(struct gve_priv *priv);
+void gve_rss_set_default_indir(struct gve_priv *priv);
+void gve_rss_config_release(struct gve_rss_config *rss_config);
+
 /* exported by ethtool.c */
 extern const struct ethtool_ops gve_ethtool_ops;
 /* needed by ethtool */
