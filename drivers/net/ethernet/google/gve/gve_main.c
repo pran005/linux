@@ -1697,6 +1697,7 @@ static int gve_adjust_queue_count(struct gve_priv *priv,
 				  struct gve_queue_config new_rx_config,
 				  struct gve_queue_config new_tx_config)
 {
+	struct gve_queue_config old_rx_config = priv->rx_cfg;
 	int err = 0;
 
 	priv->rx_cfg = new_rx_config;
@@ -1708,12 +1709,14 @@ static int gve_adjust_queue_count(struct gve_priv *priv,
 		priv->data_buffer_size_dqo = GVE_RX_BUFFER_SIZE_DQO;
 
 
-	err = gve_flow_rules_reset(priv);
-	if (err)
-		return err;
+	if (old_rx_config.num_queues != new_rx_config.num_queues) {
+		err = gve_flow_rules_reset(priv);
+		if (err)
+			return err;
 
-	if (priv->rss_config.alg != GVE_RSS_HASH_UNDEFINED)
-		err = gve_rss_config_init(priv);
+		if (priv->rss_config.alg != GVE_RSS_HASH_UNDEFINED)
+			err = gve_rss_config_init(priv);
+	}
 
 	return err;
 }
