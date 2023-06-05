@@ -537,6 +537,7 @@ static void gve_teardown_device_resources(struct gve_priv *priv)
 
 	/* Tell device its resources are being freed */
 	if (gve_get_device_resources_ok(priv)) {
+		gve_flow_rules_reset(priv);
 		/* detach the stats report */
 		err = gve_adminq_report_stats(priv, 0, 0x0, GVE_STATS_REPORT_TIMER_PERIOD);
 		if (err) {
@@ -556,6 +557,7 @@ static void gve_teardown_device_resources(struct gve_priv *priv)
 	kvfree(priv->ptype_lut_dqo);
 	priv->ptype_lut_dqo = NULL;
 
+	gve_rss_config_release(&priv->rss_config);
 	gve_free_counter_array(priv);
 	gve_free_notify_blocks(priv);
 	gve_free_stats_report(priv);
@@ -2436,15 +2438,20 @@ void gve_rss_set_default_indir(struct gve_priv *priv)
 		rss_config->indir[i] = i % priv->rx_cfg.num_queues;
 }
 
+void gve_rss_config_release(struct gve_rss_config *rss_config)
+{
+	kvfree(rss_config->key);
+	rss_config->key = NULL;
+
+	kvfree(rss_config->indir);
+	rss_config->indir = NULL;
+}
+
 int gve_rss_config_init(struct gve_priv *priv)
 {
 	struct gve_rss_config *rss_config = &priv->rss_config;
 
-	if (rss_config->key)
-		kvfree(rss_config->key);
-
-	if (rss_config->indir)
-		kvfree(rss_config->indir);
+	gve_rss_config_release(rss_config);
 
 	memset(rss_config, 0, sizeof(*rss_config));
 
@@ -2469,10 +2476,8 @@ int gve_rss_config_init(struct gve_priv *priv)
 	return gve_adminq_configure_rss(priv, rss_config);
 
 err:
-	if (rss_config->key) {
-		kvfree(rss_config->key);
-		rss_config->key = NULL;
-	}
+	kvfree(rss_config->key);
+	rss_config->key = NULL;
 	return -ENOMEM;
 }
 
