@@ -2441,10 +2441,8 @@ void gve_rss_set_default_indir(struct gve_priv *priv)
 void gve_rss_config_release(struct gve_rss_config *rss_config)
 {
 	kvfree(rss_config->key);
-	rss_config->key = NULL;
-
 	kvfree(rss_config->indir);
-	rss_config->indir = NULL;
+	memset(rss_config, 0, sizeof(*rss_config));
 }
 
 int gve_rss_config_init(struct gve_priv *priv)
@@ -2452,8 +2450,6 @@ int gve_rss_config_init(struct gve_priv *priv)
 	struct gve_rss_config *rss_config = &priv->rss_config;
 
 	gve_rss_config_release(rss_config);
-
-	memset(rss_config, 0, sizeof(*rss_config));
 
 	rss_config->key = kvzalloc(GVE_RSS_KEY_SIZE, GFP_KERNEL);
 	if (!rss_config->key)
@@ -2466,7 +2462,6 @@ int gve_rss_config_init(struct gve_priv *priv)
 				     GFP_KERNEL);
 	if (!rss_config->indir)
 		goto err;
-
 
 	rss_config->alg = GVE_RSS_HASH_TOEPLITZ;
 	rss_config->key_size = GVE_RSS_KEY_SIZE;
