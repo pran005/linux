@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 # Makefile for net selftests
 
-CFLAGS =  -Wall -Wl,--no-as-needed -O2 -g
+CFLAGS +=  -Wall -Wl,--no-as-needed -O2 -g
 CFLAGS += -I../../../../usr/include/ $(KHDR_INCLUDES)
 # Additional include paths needed by kselftest.h
 CFLAGS += -I../
@@ -9,6 +9,8 @@ CFLAGS += -I../../../net/ynl/generated/
 CFLAGS += -I../../../net/ynl/lib/
 
 LDLIBS += ../../../net/ynl/lib/ynl.a ../../../net/ynl/generated/protos.a
+
+LDLIBS += -lmnl
 
 TEST_PROGS := run_netsocktests run_afpackettests test_bpf.sh netdevice.sh \
 	      rtnetlink.sh xfrm_policy.sh test_blackhole_dev.sh
