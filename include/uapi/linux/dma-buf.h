@@ -179,4 +179,13 @@ struct dma_buf_import_sync_file {
 #define DMA_BUF_IOCTL_EXPORT_SYNC_FILE	_IOWR(DMA_BUF_BASE, 2, struct dma_buf_export_sync_file)
 #define DMA_BUF_IOCTL_IMPORT_SYNC_FILE	_IOW(DMA_BUF_BASE, 3, struct dma_buf_import_sync_file)
 
+struct dma_buf_create_pages_info {
+	__u8 pci_bdf[3];
+	__s32 dma_buf_fd;
+	__u32 type;
+	__u64 create_flags;
+};
+
+#define DMA_BUF_CREATE_PAGES	_IOW(DMA_BUF_BASE, 4, struct dma_buf_create_pages_info)
+
 #endif

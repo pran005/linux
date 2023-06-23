@@ -22,6 +22,7 @@
 #include <linux/module.h>
 #include <linux/seq_file.h>
 #include <linux/sync_file.h>
+#include <linux/pci.h>
 #include <linux/poll.h>
 #include <linux/dma-resv.h>
 #include <linux/mm.h>
@@ -442,12 +443,16 @@ static long dma_buf_import_sync_file(struct dma_buf *dmabuf,
 }
 #endif
 
+static long dma_buf_create_pages(struct file *file,
+				 struct dma_buf_create_pages_info *create_info);
+
 static long dma_buf_ioctl(struct file *file,
 			  unsigned int cmd, unsigned long arg)
 {
 	struct dma_buf *dmabuf;
 	struct dma_buf_sync sync;
 	enum dma_data_direction direction;
+	struct dma_buf_create_pages_info create_info;
 	int ret;
 
 	dmabuf = file->private_data;
@@ -484,6 +489,12 @@ static long dma_buf_ioctl(struct file *file,
 	case DMA_BUF_SET_NAME_A:
 	case DMA_BUF_SET_NAME_B:
 		return dma_buf_set_name(dmabuf, (const char __user *)arg);
+	case DMA_BUF_CREATE_PAGES:
+		if (copy_from_user(&create_info, (void __user *)arg,
+				   sizeof(create_info)))
+			return -EFAULT;
+
+		return dma_buf_create_pages(file, &create_info);
 
 #if IS_ENABLED(CONFIG_SYNC_FILE)
 	case DMA_BUF_IOCTL_EXPORT_SYNC_FILE:
@@ -1612,6 +1623,188 @@ void dma_buf_vunmap_unlocked(struct dma_buf *dmabuf, struct iosys_map *map)
 	dma_resv_unlock(dmabuf->resv);
 }
 EXPORT_SYMBOL_NS_GPL(dma_buf_vunmap_unlocked, DMA_BUF);
+
+static int dma_buf_pages_release(struct inode *inode, struct file *file)
+{
+	percpu_ref_kill(&priv->pgmap.ref);
+	/* Drop initial ref after percpu_ref_kill(). */
+	percpu_ref_put(&priv->pgmap.ref);
+
+	return 0;
+}
+
+static void dma_buf_page_free(struct page *page)
+{
+}
+
+const struct dev_pagemap_ops dma_buf_pgmap_ops = {
+	.page_free	= dma_buf_page_free,
+};
+EXPORT_SYMBOL_GPL(dma_buf_pgmap_ops);
+
+const struct file_operations dma_buf_pages_fops = {
+	.release	= dma_buf_pages_release,
+};
+EXPORT_SYMBOL_GPL(dma_buf_pages_fops);
+
+#ifdef CONFIG_ZONE_DEVICE
+static void dma_buf_pages_destroy(struct percpu_ref *ref)
+{
+	struct dma_buf_pages *priv;
+	struct dev_pagemap *pgmap;
+
+	pgmap = container_of(ref, struct dev_pagemap, ref);
+	priv = container_of(pgmap, struct dma_buf_pages, pgmap);
+
+	kvfree(priv->pages);
+	kfree(priv);
+
+	dma_buf_unmap_attachment(priv->attachment, priv->sgt, priv->direction);
+	dma_buf_detach(priv->dmabuf, priv->attachment);
+	dma_buf_put(priv->dmabuf);
+	pci_dev_put(priv->pci_dev);
+}
+
+static long dma_buf_create_pages(struct file *file,
+				 struct dma_buf_create_pages_info *create_info)
+{
+	int err, fd, i, pg_idx;
+	struct scatterlist *sg;
+	struct dma_buf_pages *priv;
+	struct file *new_file;
+
+	fd = get_unused_fd_flags(O_RDWR | O_CLOEXEC);
+	if (fd < 0) {
+		err = fd;
+		goto out_err;
+	}
+
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+	if (!priv) {
+		err = -ENOMEM;
+		goto out_put_fd;
+	}
+
+	priv->pgmap.type = MEMORY_DEVICE_PRIVATE;
+	priv->pgmap.ops = &dma_buf_pgmap_ops;
+	init_completion(&priv->pgmap.done);
+
+	/* This refcount is incremented every time a page in priv->pages is
+	 * allocated, and decremented every time a page is freed. When
+	 * it drops to 0, the dma_buf_pages can be destroyed. An initial ref is
+	 * held and the dma_buf_pages is not destroyed until that is dropped.
+	 */
+	err = percpu_ref_init(&priv->pgmap.ref, dma_buf_pages_destroy, 0,
+			      GFP_KERNEL);
+	if (err)
+		goto out_free_priv;
+
+	/* Initial ref to be dropped after percpu_ref_kill(). */
+	percpu_ref_get(&priv->pgmap.ref);
+
+	priv->pci_dev = pci_get_domain_bus_and_slot(
+		0, create_info->pci_bdf[0],
+		PCI_DEVFN(create_info->pci_bdf[1], create_info->pci_bdf[2]));
+	if (!priv->pci_dev) {
+		err = -ENODEV;
+		goto out_exit_percpu_ref;
+	}
+
+	priv->dmabuf = dma_buf_get(create_info->dma_buf_fd);
+	if (IS_ERR(priv->dmabuf)) {
+		err = PTR_ERR(priv->dmabuf);
+		goto out_put_pci_dev;
+	}
+
+	if (priv->dmabuf->size % PAGE_SIZE != 0) {
+		err = -EINVAL;
+		goto out_put_dma_buf;
+	}
+
+	priv->attachment = dma_buf_attach(priv->dmabuf, &priv->pci_dev->dev);
+	if (IS_ERR(priv->attachment)) {
+		err = PTR_ERR(priv->attachment);
+		goto out_put_dma_buf;
+	}
+
+	priv->num_pages = priv->dmabuf->size / PAGE_SIZE;
+	priv->pages = kvmalloc_array(priv->num_pages, sizeof(struct page),
+				     GFP_KERNEL);
+	if (!priv->pages) {
+		err = -ENOMEM;
+		goto out_detach_dma_buf;
+	}
+
+	for (i = 0; i < priv->num_pages; i++) {
+		struct page *page = &priv->pages[i];
+
+		mm_zero_struct_page(page);
+		set_page_zone(page, ZONE_DEVICE);
+		set_page_count(page, 1);
+		page->pgmap = &priv->pgmap;
+	}
+
+	priv->direction = DMA_BIDIRECTIONAL;
+	priv->sgt = dma_buf_map_attachment(priv->attachment, priv->direction);
+	if (IS_ERR(priv->sgt)) {
+		err = PTR_ERR(priv->sgt);
+		goto out_free_pages;
+	}
+
+	/* write each dma addresses from sgt to each page */
+	pg_idx = 0;
+	for_each_sgtable_dma_sg(priv->sgt, sg, i) {
+		size_t len = sg_dma_len(sg);
+		dma_addr_t dma_addr = sg_dma_address(sg);
+
+		BUG_ON(!PAGE_ALIGNED(len));
+		while (len > 0) {
+			priv->pages[pg_idx].zone_device_data = (void *)dma_addr;
+			pg_idx++;
+			dma_addr += PAGE_SIZE;
+			len -= PAGE_SIZE;
+		}
+	}
+
+	priv->type = create_info->type;
+	priv->create_flags = create_info->create_flags;
+
+	new_file = anon_inode_getfile("[dma_buf_pages]", &dma_buf_pages_fops,
+				      (void *)priv, O_RDWR | O_CLOEXEC);
+	if (IS_ERR(new_file)) {
+		err = PTR_ERR(new_file);
+		goto out_unmap_dma_buf;
+	}
+
+	fd_install(fd, new_file);
+	return fd;
+
+out_unmap_dma_buf:
+	dma_buf_unmap_attachment(priv->attachment, priv->sgt, priv->direction);
+out_free_pages:
+	kvfree(priv->pages);
+out_detach_dma_buf:
+	dma_buf_detach(priv->dmabuf, priv->attachment);
+out_put_dma_buf:
+	dma_buf_put(priv->dmabuf);
+out_put_pci_dev:
+	pci_dev_put(priv->pci_dev);
+out_exit_percpu_ref:
+	percpu_ref_exit(&priv->pgmap.ref);
+out_free_priv:
+	kfree(priv);
+out_put_fd:
+	put_unused_fd(fd);
+out_err:
+	return err;
+}
+#else
+static long dma_buf_create_pages(struct file *file,
+				 struct dma_buf_create_pages_info *create_info)
+{
+	return -ENOTSUPP;
+}
+#endif
 
 #ifdef CONFIG_DEBUG_FS
 static int dma_buf_debug_show(struct seq_file *s, void *unused)

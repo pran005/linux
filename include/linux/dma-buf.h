@@ -540,6 +540,23 @@ struct dma_buf_export_info {
 	void *priv;
 };
 
+struct dma_buf_pages {
+	/* fields for dmabuf */
+	struct dma_buf *dmabuf;
+	struct dma_buf_attachment *attachment;
+	struct sg_table *sgt;
+	struct pci_dev *pci_dev;
+	enum dma_data_direction direction;
+
+	/* fields for dma-buf pages */
+	size_t num_pages;
+	struct page *pages;
+	struct dev_pagemap pgmap;
+
+	unsigned int type;
+	__u64 create_flags;
+};
+
 /**
  * DEFINE_DMA_BUF_EXPORT_INFO - helper macro for exporters
  * @name: export-info name
@@ -631,4 +648,52 @@ int dma_buf_vmap(struct dma_buf *dmabuf, struct iosys_map *map);
 void dma_buf_vunmap(struct dma_buf *dmabuf, struct iosys_map *map);
 int dma_buf_vmap_unlocked(struct dma_buf *dmabuf, struct iosys_map *map);
 void dma_buf_vunmap_unlocked(struct dma_buf *dmabuf, struct iosys_map *map);
+
+#ifdef CONFIG_DMA_SHARED_BUFFER
+extern const struct file_operations dma_buf_pages_fops;
+extern const struct dev_pagemap_ops dma_buf_pgmap_ops;
+
+static inline bool is_dma_buf_pages_file(struct file *file)
+{
+	return file->f_op == &dma_buf_pages_fops;
+}
+
+static inline bool is_dma_buf_page(struct page *page)
+{
+	return (is_zone_device_page(page) && page->pgmap &&
+		page->pgmap->ops == &dma_buf_pgmap_ops);
+}
+#else
+static bool is_dma_buf_page(struct page *page)
+{
+	return false;
+}
+
+static bool is_dma_buf_pages_file(struct file *file)
+{
+	return false;
+}
+#endif
+
+static inline dma_addr_t dma_buf_page_to_dma_addr(struct page *page)
+{
+	return (dma_addr_t)page->zone_device_data;
+}
+
+static inline int dma_buf_map_sg(struct device *dev, struct scatterlist *sg,
+				 int nents, enum dma_data_direction dir)
+{
+	struct scatterlist *s;
+	int i;
+
+	for_each_sg(sg, s, nents, i) {
+		struct page *pg = sg_page(s);
+
+		s->dma_address = dma_buf_page_to_dma_addr(pg);
+		sg_dma_len(s) = s->length;
+	}
+
+	return nents;
+}
+
 #endif /* __DMA_BUF_H__ */
