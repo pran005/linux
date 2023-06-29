@@ -22,6 +22,9 @@
 #include <linux/fs.h>
 #include <linux/dma-fence.h>
 #include <linux/wait.h>
+#include <linux/genalloc.h>
+#include <linux/xarray.h>
+#include <net/page_pool.h>
 
 struct device;
 struct dma_buf;
@@ -540,6 +543,11 @@ struct dma_buf_export_info {
 	void *priv;
 };
 
+struct dma_buf_pages_net_rx {
+	struct gen_pool *page_pool;
+	struct xarray bound_rxq_list;
+};
+
 struct dma_buf_pages {
 	/* fields for dmabuf */
 	struct dma_buf *dmabuf;
@@ -555,6 +563,10 @@ struct dma_buf_pages {
 
 	unsigned int type;
 	__u64 create_flags;
+
+	union {
+		struct dma_buf_pages_net_rx net_rx;
+	};
 };
 
 /**
@@ -658,17 +670,39 @@ static inline bool is_dma_buf_pages_file(struct file *file)
 	return file->f_op == &dma_buf_pages_fops;
 }
 
+struct page *dma_buf_pages_net_rx_alloc(struct dma_buf_pages *priv);
+
+static inline bool is_dma_buf_page_net_rx(struct page *page)
+{
+	struct dma_buf_pages *priv;
+
+	return (is_page_pool_page(page) && (priv = page->pp->mp_priv) &&
+		priv->pgmap.ops == &dma_buf_pgmap_ops);
+}
+
 static inline bool is_dma_buf_page(struct page *page)
 {
 	return (is_zone_device_page(page) && page->pgmap &&
-		page->pgmap->ops == &dma_buf_pgmap_ops);
+		page->pgmap->ops == &dma_buf_pgmap_ops) ||
+	       is_dma_buf_page_net_rx(page);
 }
+
 #else
-static bool is_dma_buf_page(struct page *page)
+static inline struct page *
+dma_buf_pages_net_rx_alloc(struct dma_buf_pages *priv)
+{
+	return NULL;
+}
+
+static inline bool is_dma_buf_page_net_rx(struct page *page)
 {
 	return false;
 }
 
+static inline bool is_dma_buf_page(struct page *page)
+{
+	return false;
+}
 static bool is_dma_buf_pages_file(struct file *file)
 {
 	return false;
@@ -677,7 +711,36 @@ static bool is_dma_buf_pages_file(struct file *file)
 
 static inline dma_addr_t dma_buf_page_to_dma_addr(struct page *page)
 {
-	return (dma_addr_t)page->zone_device_data;
+	return is_dma_buf_page_net_rx(page) ?
+		       (dma_addr_t)page->dma_addr :
+		       (dma_addr_t)page->zone_device_data;
+}
+
+static inline unsigned long dma_buf_page_to_gen_pool_addr(struct page *page)
+{
+	struct dma_buf_pages *priv;
+	struct dev_pagemap *pgmap;
+	unsigned long offset;
+
+	pgmap = page->pgmap;
+	priv = container_of(pgmap, struct dma_buf_pages, pgmap);
+	offset = page - priv->pages;
+	/* Offset + 1 is due to the fact that we want to avoid 0 virt address
+	 * returned from the gen_pool. The gen_pool returns 0 on error, and virt
+	 * address 0 is indistinguishable from an error.
+	 */
+	return (offset + 1) << PAGE_SHIFT;
+}
+
+static inline struct page *
+dma_buf_gen_pool_addr_to_page(unsigned long addr, struct dma_buf_pages *priv)
+{
+	/* - 1 is due to the fact that we want to avoid 0 virt address
+	 * returned from the gen_pool. See comment in dma_buf_create_pages()
+	 * for details.
+	 */
+	unsigned long offset = (addr >> PAGE_SHIFT) - 1;
+	return &priv->pages[offset];
 }
 
 static inline int dma_buf_map_sg(struct device *dev, struct scatterlist *sg,

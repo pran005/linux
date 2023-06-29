@@ -27,6 +27,7 @@
 #include <linux/dma-resv.h>
 #include <linux/mm.h>
 #include <linux/mount.h>
+#include <linux/netdevice.h>
 #include <linux/pseudo_fs.h>
 
 #include <uapi/linux/dma-buf.h>
@@ -1624,8 +1625,24 @@ void dma_buf_vunmap_unlocked(struct dma_buf *dmabuf, struct iosys_map *map)
 }
 EXPORT_SYMBOL_NS_GPL(dma_buf_vunmap_unlocked, DMA_BUF);
 
+static void release_dma_buf_pages_net_rx(struct dma_buf_pages *priv,
+					 struct file *file)
+{
+	struct netdev_rx_queue *rxq;
+	unsigned long xa_idx;
+
+	xa_for_each(&priv->net_rx.bound_rxq_list, xa_idx, rxq)
+		if (rxq->dmabuf_pages == file)
+			rxq->dmabuf_pages = NULL;
+}
+
 static int dma_buf_pages_release(struct inode *inode, struct file *file)
 {
+	struct dma_buf_pages *priv = file->private_data;
+
+	if (priv->type & DMA_BUF_PAGES_NET_RX)
+		release_dma_buf_pages_net_rx(priv, file);
+
 	percpu_ref_kill(&priv->pgmap.ref);
 	/* Drop initial ref after percpu_ref_kill(). */
 	percpu_ref_put(&priv->pgmap.ref);
@@ -1633,8 +1650,130 @@ static int dma_buf_pages_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
+static int dev_is_class(struct device *dev, void *class)
+{
+	if (dev->class != NULL && !strcmp(dev->class->name, class))
+		return 1;
+
+	return 0;
+}
+
+static int initialize_dma_buf_pages_net_rx(struct dma_buf_pages *priv,
+					   struct file *file)
+{
+	struct netdev_rx_queue *rxq;
+	struct net_device *netdev;
+	struct device *device;
+	int xa_id, err, rxq_idx;
+
+	priv->net_rx.page_pool =
+		gen_pool_create(PAGE_SHIFT, dev_to_node(&priv->pci_dev->dev));
+	if (!priv->net_rx.page_pool)
+		return -ENOMEM;
+
+	/*
+	 * We start with PAGE_SIZE instead of 0 since gen_pool_alloc_*() returns
+	 * NULL on error
+	 */
+	err = gen_pool_add_virt(priv->net_rx.page_pool, PAGE_SIZE, 0,
+				PAGE_SIZE * priv->num_pages,
+				dev_to_node(&priv->pci_dev->dev));
+	if (err)
+		goto out_destroy_pool;
+
+	xa_init_flags(&priv->net_rx.bound_rxq_list, XA_FLAGS_ALLOC);
+
+	device = device_find_child(&priv->pci_dev->dev, "net", dev_is_class);
+	if (!device) {
+		err = -ENODEV;
+		goto out_destroy_xarray;
+	}
+
+	netdev = to_net_dev(device);
+	if (!netdev) {
+		err = -ENODEV;
+		goto out_put_dev;
+	}
+
+	for (rxq_idx = 0; rxq_idx < (sizeof(priv->create_flags) * 8);
+	     rxq_idx++) {
+		if (!(priv->create_flags & (1ULL << rxq_idx)))
+			continue;
+
+		if (rxq_idx >= netdev->num_rx_queues) {
+			err = -ERANGE;
+			goto out_release_rx;
+		}
+
+		rxq = __netif_get_rx_queue(netdev, rxq_idx);
+
+		err = xa_alloc(&priv->net_rx.bound_rxq_list, &xa_id, rxq,
+			       xa_limit_32b, GFP_KERNEL);
+		if (err)
+			goto out_release_rx;
+
+		/* We previously have done a dma_buf_attach(), which validates
+		 * that the net_device we're trying to attach to can reach the
+		 * dmabuf, so we don't need to check here as well.
+		 */
+		rxq->dmabuf_pages = file;
+	}
+	put_device(device);
+	return 0;
+
+out_release_rx:
+	release_dma_buf_pages_net_rx(priv, file);
+out_put_dev:
+	put_device(device);
+out_destroy_xarray:
+	xa_destroy(&priv->net_rx.bound_rxq_list);
+out_destroy_pool:
+	gen_pool_destroy(priv->net_rx.page_pool);
+	return err;
+}
+
+static void free_dma_buf_pages_net_rx(struct dma_buf_pages *priv)
+{
+	xa_destroy(&priv->net_rx.bound_rxq_list);
+	gen_pool_destroy(priv->net_rx.page_pool);
+}
+
+struct page *dma_buf_pages_net_rx_alloc(struct dma_buf_pages *priv)
+{
+	unsigned long gen_pool_addr;
+	struct page *pg;
+
+	if (!(priv->type & DMA_BUF_PAGES_NET_RX))
+		return NULL;
+
+	gen_pool_addr = gen_pool_alloc(priv->net_rx.page_pool, PAGE_SIZE);
+	if (!gen_pool_addr)
+		return NULL;
+
+	if (!PAGE_ALIGNED(gen_pool_addr)) {
+		net_err_ratelimited("dmabuf page pool allocation not aligned");
+		gen_pool_free(priv->net_rx.page_pool, gen_pool_addr, PAGE_SIZE);
+		return NULL;
+	}
+
+	pg = dma_buf_gen_pool_addr_to_page(gen_pool_addr, priv);
+
+	percpu_ref_get(&priv->pgmap.ref);
+	return pg;
+}
+
 static void dma_buf_page_free(struct page *page)
 {
+	unsigned long addr = dma_buf_page_to_gen_pool_addr(page);
+	struct dma_buf_pages *priv;
+	struct dev_pagemap *pgmap;
+
+	pgmap = page->pgmap;
+	priv = container_of(pgmap, struct dma_buf_pages, pgmap);
+
+	if (priv->type & DMA_BUF_PAGES_NET_RX)
+		if (gen_pool_has_addr(priv->net_rx.page_pool, addr, PAGE_SIZE))
+			gen_pool_free(priv->net_rx.page_pool, addr, PAGE_SIZE);
 }
 
 const struct dev_pagemap_ops dma_buf_pgmap_ops = {
@@ -1655,6 +1794,9 @@ static void dma_buf_pages_destroy(struct percpu_ref *ref)
 
 	pgmap = container_of(ref, struct dev_pagemap, ref);
 	priv = container_of(pgmap, struct dma_buf_pages, pgmap);
+
+	if (priv->type & DMA_BUF_PAGES_NET_RX)
+		free_dma_buf_pages_net_rx(priv);
 
 	kvfree(priv->pages);
 	kfree(priv);
@@ -1776,9 +1918,17 @@ static long dma_buf_create_pages(struct file *file,
 		goto out_unmap_dma_buf;
 	}
 
+	if (create_info->type & DMA_BUF_PAGES_NET_RX) {
+		err = initialize_dma_buf_pages_net_rx(priv, new_file);
+		if (err)
+			goto out_put_new_file;
+	}
+
 	fd_install(fd, new_file);
 	return fd;
 
+out_put_new_file:
+	fput(new_file);
 out_unmap_dma_buf:
 	dma_buf_unmap_attachment(priv->attachment, priv->sgt, priv->direction);
 out_free_pages:

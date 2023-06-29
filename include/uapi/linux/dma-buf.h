@@ -186,6 +186,8 @@ struct dma_buf_create_pages_info {
 	__u64 create_flags;
 };
 
+#define DMA_BUF_PAGES_NET_RX		(1 << 0)
+
 #define DMA_BUF_CREATE_PAGES	_IOW(DMA_BUF_BASE, 4, struct dma_buf_create_pages_info)
 
 #endif

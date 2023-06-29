@@ -796,6 +796,7 @@ struct netdev_rx_queue {
 #ifdef CONFIG_XDP_SOCKETS
 	struct xsk_buff_pool            *pool;
 #endif
+	struct file __rcu		*dmabuf_pages;
 } ____cacheline_aligned_in_smp;
 
 /*
