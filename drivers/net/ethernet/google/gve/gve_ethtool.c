@@ -462,6 +462,11 @@ static void gve_get_channels(struct net_device *netdev,
 	cmd->tx_count = priv->tx_cfg.num_queues;
 	cmd->other_count = 0;
 	cmd->combined_count = 0;
+
+	for (int i = 0; i < netdev->num_rx_queues; i++) {
+		pr_err("queue %2d is bound=%d\n", i,
+		       !!__netif_get_rx_queue(netdev, i)->dmabuf_pages);
+	}
 }
 
 static int gve_set_channels(struct net_device *netdev,
