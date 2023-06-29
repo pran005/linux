@@ -22,6 +22,7 @@
 #include <linux/fs.h>
 #include <linux/dma-fence.h>
 #include <linux/wait.h>
+#include <linux/uio.h>
 #include <linux/genalloc.h>
 #include <linux/xarray.h>
 #include <net/page_pool.h>
@@ -543,6 +544,11 @@ struct dma_buf_export_info {
 	void *priv;
 };
 
+struct dma_buf_pages_net_tx {
+	struct iov_iter iter;
+	struct bio_vec *tx_bv;
+};
+
 struct dma_buf_pages_net_rx {
 	struct gen_pool *page_pool;
 	struct xarray bound_rxq_list;
@@ -566,6 +572,7 @@ struct dma_buf_pages {
 
 	union {
 		struct dma_buf_pages_net_rx net_rx;
+		struct dma_buf_pages_net_tx net_tx;
 	};
 };
 

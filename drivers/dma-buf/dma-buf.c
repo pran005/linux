@@ -1636,12 +1636,21 @@ static void release_dma_buf_pages_net_rx(struct dma_buf_pages *priv,
 			rxq->dmabuf_pages = NULL;
 }
 
+static void release_dma_buf_pages_net_tx(struct dma_buf_pages *priv)
+{
+	int i;
+	for (i = 0; i < priv->num_pages; i++)
+		put_page(&priv->pages[i]);
+}
+
 static int dma_buf_pages_release(struct inode *inode, struct file *file)
 {
 	struct dma_buf_pages *priv = file->private_data;
 
 	if (priv->type & DMA_BUF_PAGES_NET_RX)
 		release_dma_buf_pages_net_rx(priv, file);
+	else if (priv->type & DMA_BUF_PAGES_NET_TX)
+		release_dma_buf_pages_net_tx(priv);
 
 	percpu_ref_kill(&priv->pgmap.ref);
 	/* Drop initial ref after percpu_ref_kill(). */
@@ -1656,6 +1665,30 @@ static int dev_is_class(struct device *dev, void *class)
 		return 1;
 
 	return 0;
+}
+
+static int initialize_dma_buf_pages_net_tx(struct dma_buf_pages *priv)
+{
+	int i;
+	priv->net_tx.tx_bv = kvmalloc_array(priv->num_pages,
+					    sizeof(struct bio_vec), GFP_KERNEL);
+	if (!priv->net_tx.tx_bv)
+		return -ENOMEM;
+
+	for (i = 0; i < priv->num_pages; i++) {
+		priv->net_tx.tx_bv[i].bv_page = &priv->pages[i];
+		priv->net_tx.tx_bv[i].bv_offset = 0;
+		priv->net_tx.tx_bv[i].bv_len = PAGE_SIZE;
+	}
+	percpu_ref_get_many(&priv->pgmap.ref, priv->num_pages);
+	iov_iter_bvec(&priv->net_tx.iter, WRITE, priv->net_tx.tx_bv,
+		      priv->num_pages, priv->dmabuf->size);
+	return 0;
+}
+
+static void free_dma_buf_pages_net_tx(struct dma_buf_pages *priv)
+{
+	kvfree(priv->net_tx.tx_bv);
 }
 
 static int initialize_dma_buf_pages_net_rx(struct dma_buf_pages *priv,
@@ -1797,6 +1830,8 @@ static void dma_buf_pages_destroy(struct percpu_ref *ref)
 
 	if (priv->type & DMA_BUF_PAGES_NET_RX)
 		free_dma_buf_pages_net_rx(priv);
+	else if (priv->type & DMA_BUF_PAGES_NET_TX)
+		free_dma_buf_pages_net_tx(priv);
 
 	kvfree(priv->pages);
 	kfree(priv);
@@ -1920,6 +1955,10 @@ static long dma_buf_create_pages(struct file *file,
 
 	if (create_info->type & DMA_BUF_PAGES_NET_RX) {
 		err = initialize_dma_buf_pages_net_rx(priv, new_file);
+		if (err)
+			goto out_put_new_file;
+	} else if (create_info->type & DMA_BUF_PAGES_NET_TX) {
+		err = initialize_dma_buf_pages_net_tx(priv);
 		if (err)
 			goto out_put_new_file;
 	}
