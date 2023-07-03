@@ -2152,7 +2152,7 @@ static int packet_rcv(struct sk_buff *skb, struct net_device *dev,
 		}
 	}
 
-	snaplen = skb->len;
+	snaplen = skb->devmem ? skb_headlen(skb) : skb->len;
 
 	res = run_filter(skb, sk, snaplen);
 	if (!res)
@@ -2275,7 +2275,7 @@ static int tpacket_rcv(struct sk_buff *skb, struct net_device *dev,
 		}
 	}
 
-	snaplen = skb->len;
+	snaplen = skb->devmem ? skb_headlen(skb) : skb->len;
 
 	res = run_filter(skb, sk, snaplen);
 	if (!res)

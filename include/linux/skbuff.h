@@ -805,6 +805,8 @@ typedef unsigned char *sk_buff_data_t;
  *	@csum_level: indicates the number of consecutive checksums found in
  *		the packet minus one that have been verified as
  *		CHECKSUM_UNNECESSARY (max 3)
+ *	@devmem: indicates that all the fragments in this skb is backed by
+ *		device memory.
  *	@dst_pending_confirm: need to confirm neighbour
  *	@decrypted: Decrypted SKB
  *	@slow_gro: state present at GRO time, slower prepare step required
@@ -992,6 +994,7 @@ struct sk_buff {
 	__u8			csum_not_inet:1;
 #endif
 
+	__u8			devmem:1;
 #ifdef CONFIG_NET_SCHED
 	__u16			tc_index;	/* traffic control index */
 #endif
@@ -2469,6 +2472,8 @@ static inline void __skb_fill_page_desc(struct sk_buff *skb, int i,
 	page = compound_head(page);
 	if (page_is_pfmemalloc(page))
 		skb->pfmemalloc	= true;
+	if (is_dma_buf_page(page))
+		skb->devmem = true;
 }
 
 /**
@@ -2511,6 +2516,9 @@ static inline void skb_fill_page_desc_noacc(struct sk_buff *skb, int i,
 
 	__skb_fill_page_desc_noacc(shinfo, i, page, off, size);
 	shinfo->nr_frags = i + 1;
+
+	if (is_dma_buf_page(page))
+		skb->devmem = true;
 }
 
 void skb_add_rx_frag(struct sk_buff *skb, int i, struct page *page, int off,
