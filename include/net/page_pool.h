@@ -157,6 +157,7 @@ enum pp_memory_provider_type {
 	PP_MP_HUGE_SPLIT, /* 2MB, online page alloc */
 	PP_MP_HUGE, /* 2MB, all memory pre-allocated */
 	PP_MP_HUGE_1G, /* 1G pages, MEP, pre-allocated */
+	PP_MP_DMABUF_DEVMEM, /* dmabuf devmem provider */
 };
 
 struct pp_memory_provider_ops {
@@ -170,6 +171,7 @@ extern const struct pp_memory_provider_ops basic_ops;
 extern const struct pp_memory_provider_ops hugesp_ops;
 extern const struct pp_memory_provider_ops huge_ops;
 extern const struct pp_memory_provider_ops huge_1g_ops;
+extern const struct pp_memory_provider_ops dmabuf_devmem_ops;
 
 struct page_pool {
 	struct page_pool_params p;
@@ -418,6 +420,24 @@ static inline void page_pool_nid_changed(struct page_pool *pool, int new_nid)
 {
 	if (unlikely(pool->p.nid != new_nid))
 		page_pool_update_nid(pool, new_nid);
+}
+
+static inline bool is_page_pool_page(struct page *page)
+{
+	/* page->pp_magic is OR'ed with PP_SIGNATURE after the allocation
+	 * in order to preserve any existing bits, such as bit 0 for the
+	 * head page of compound page and bit 1 for pfmemalloc page, so
+	 * mask those bits for freeing side when doing below checking,
+	 * and page_is_pfmemalloc() is checked in __page_pool_put_page()
+	 * to avoid recycling the pfmemalloc page.
+	 */
+	if (unlikely((page->pp_magic & ~0x3UL) != PP_SIGNATURE))
+		return false;
+
+	if (!page->pp)
+		return false;
+
+	return true;
 }
 
 #endif /* _NET_PAGE_POOL_H */

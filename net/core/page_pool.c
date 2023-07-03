@@ -236,6 +236,9 @@ static int page_pool_init(struct page_pool *pool,
 	case PP_MP_HUGE_1G:
 		pool->mp_ops = &huge_1g_ops;
 		break;
+	case PP_MP_DMABUF_DEVMEM:
+		pool->mp_ops = &dmabuf_devmem_ops;
+		break;
 	default:
 		err = -EINVAL;
 		goto free_ptr_ring;
@@ -975,14 +978,7 @@ bool page_pool_return_skb_page(struct page *page, bool napi_safe)
 
 	page = compound_head(page);
 
-	/* page->pp_magic is OR'ed with PP_SIGNATURE after the allocation
-	 * in order to preserve any existing bits, such as bit 0 for the
-	 * head page of compound page and bit 1 for pfmemalloc page, so
-	 * mask those bits for freeing side when doing below checking,
-	 * and page_is_pfmemalloc() is checked in __page_pool_put_page()
-	 * to avoid recycling the pfmemalloc page.
-	 */
-	if (unlikely((page->pp_magic & ~0x3UL) != PP_SIGNATURE))
+	if (!is_page_pool_page(page))
 		return false;
 
 	pp = page->pp;
@@ -1538,3 +1534,95 @@ const struct pp_memory_provider_ops huge_1g_ops = {
 	.alloc_pages		= mp_huge_1g_alloc_pages,
 	.release_page		= mp_huge_1g_release,
 };
+
+/*** "Dmabuf devmem page" ***/
+
+/* Dmabuf devmem memory provider allocates DMA_BUF_PAGES_NET_RX pages which are
+ * backing the dma_buf_map_attachment() from the NIC to the device memory.
+ *
+ * These pages are wrappers around the dma_addr of the sg entries in the
+ * sg_table returned from dma_buf_map_attachment(). They can be passed to the
+ * networking stack, which will generate devmem skbs from them and process them
+ * correctly.
+ */
+static int mp_dmabuf_devmem_init(struct page_pool *pool)
+{
+	struct dma_buf_pages *priv;
+
+	priv = pool->mp_priv;
+	if (!priv || priv->pgmap.ops != &dma_buf_pgmap_ops)
+		return -EINVAL;
+
+	return 0;
+}
+
+static void mp_dmabuf_devmem_destroy(struct page_pool *pool)
+{
+}
+
+static struct page *mp_dmabuf_devmem_alloc_pages(struct page_pool *pool,
+						 gfp_t gfp)
+{
+	struct dma_buf_pages *priv = pool->mp_priv;
+	dma_addr_t dma_addr;
+	struct page *page;
+
+	page = dma_buf_pages_net_rx_alloc(priv);
+	if (!page)
+		return page;
+
+	/* It shouldn't be possible for the allocation to give us a page not
+	 * belonging to this page_pool's pgmap.
+	 */
+	BUG_ON(page->pgmap != &priv->pgmap);
+
+	/* netdev_rxq_alloc_dma_buf_page() allocates a ZONE_DEVICE page.
+	 * Prepare to convert it into a page_pool page. We need to hold pgmap
+	 * and zone_device_data (which holds the dma_addr).
+	 *
+	 * DMA_BUF_PAGES_NET_RX are dmabuf pages created specifically to wrap
+	 * the dma_addr of the sg_table into a struct page. These pages are
+	 * used by code specifically equipped to handle them, so this
+	 * conversation from ZONE_DEVICE page to page pool page should be safe.
+	 */
+	dma_addr = (dma_addr_t)page->zone_device_data;
+
+	set_page_zone(page, ZONE_NORMAL);
+	page->pp_magic = 0;
+	page_pool_set_pp_info(pool, page);
+
+	page->dma_addr = dma_addr;
+
+	return page;
+}
+
+static bool mp_dmabuf_devmem_release_page(struct page_pool *pool,
+		struct page *page)
+{
+	struct dma_buf_pages *priv = pool->mp_priv;
+	unsigned long dma_addr = page->dma_addr;
+
+	page_pool_clear_pp_info(page);
+
+	/* As the page pool releases the page, restore it back to a ZONE_DEVICE
+	 * page so it gets freed according to the
+	 * page->pgmap->ops->page_free().
+	 */
+	set_page_zone(page, ZONE_DEVICE);
+	page->zone_device_data = (void*)dma_addr;
+	page->pgmap = &priv->pgmap;
+	put_page(page);
+
+	/* Return false here as we don't want the page pool touching the page
+	 * after it's released to us.
+	 */
+	return false;
+}
+
+const struct pp_memory_provider_ops dmabuf_devmem_ops = {
+	.init			= mp_dmabuf_devmem_init,
+	.destroy		= mp_dmabuf_devmem_destroy,
+	.alloc_pages		= mp_dmabuf_devmem_alloc_pages,
+	.release_page		= mp_dmabuf_devmem_release_page,
+};
+EXPORT_SYMBOL(dmabuf_devmem_ops);
