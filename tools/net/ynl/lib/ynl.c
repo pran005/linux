@@ -884,6 +884,10 @@ int ynl_req_trampoline(const struct nlmsghdr *nlh, struct ynl_parse_arg *yarg)
 	struct ynl_req_state *yrs = (void *)yarg;
 	int ret;
 
+	printf("here: %s:%d:%s\n", __FILE__, __LINE__, __func__);
+	if (!yrs)
+		return -1;
+
 	ret = ynl_check_alien(yrs->yarg.ys, nlh, yrs->rsp_cmd);
 	if (ret)
 		return ret < 0 ? YNL_PARSE_CB_ERROR : YNL_PARSE_CB_OK;
