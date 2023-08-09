@@ -32,7 +32,7 @@ config SW_SYNC
 
 config UDMABUF
 	bool "userspace dmabuf misc driver"
-	default n
+	default y
 	depends on DMA_SHARED_BUFFER
 	depends on MEMFD_CREATE || COMPILE_TEST
 	help
