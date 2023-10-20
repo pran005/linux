@@ -746,7 +746,12 @@ libeth_cacheline_set_assert(struct idpf_buf_queue, 60, 20, 32);
  */
 struct idpf_compl_queue {
 	libeth_cacheline_group(read_mostly,
-		struct idpf_splitq_tx_compl_desc *comp;
+		union {
+			struct idpf_splitq_tx_compl_desc *comp;
+			struct idpf_splitq_4b_tx_compl_desc *comp_4b;
+
+			void *desc_ring;
+		};
 		struct idpf_txq_group *txq_grp;
 
 		DECLARE_BITMAP(flags, __IDPF_Q_FLAGS_NBITS);
