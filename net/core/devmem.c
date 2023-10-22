@@ -64,6 +64,8 @@ void __net_devmem_dmabuf_binding_free(struct net_devmem_dmabuf_binding *binding)
 	dma_buf_put(binding->dmabuf);
 	xa_destroy(&binding->bound_rxqs);
 	kfree(binding);
+
+	mina_debug(0, 1, "freeing binding");
 }
 
 struct net_iov *
