@@ -719,15 +719,23 @@ int netdev_nl_bind_rx_doit(struct sk_buff *skb, struct genl_info *info)
 			goto err_unbind;
 
 		rxq_idx = nla_get_u32(tb[NETDEV_A_QUEUE_DMABUF_IDX]);
+
+		mina_debug(0, 1, "got rxq_idx=%d", rxq_idx);
+
 		if (rxq_idx >= netdev->num_rx_queues) {
 			err = -ERANGE;
+			mina_debug(0, 1, "failed: %d", err);
 			goto err_unbind;
 		}
 
-		err = net_devmem_bind_dmabuf_to_queue(netdev, rxq_idx,
-						      out_binding);
-		if (err)
+		mina_debug(0, 1, "got type=%d",
+			   nla_get_u8(tb[NETDEV_A_QUEUE_DMABUF_TYPE]));
+
+		err = net_devmem_bind_dmabuf_to_queue(netdev, rxq_idx, out_binding);
+		if (err) {
+			mina_debug(0, 1, "binding queue failed: %d", err);
 			goto err_unbind;
+		}
 	}
 
 	sock_binding_list = genl_sk_priv_get(&netdev_nl_family,
@@ -764,6 +772,7 @@ err_unbind:
 	net_devmem_unbind_dmabuf(out_binding);
 err_unlock:
 	rtnl_unlock();
+	mina_debug(0, 1, "failed: %d", err);
 	return err;
 }
 
@@ -814,6 +823,7 @@ subsys_initcall(netdev_genl_init);
 
 void netdev_nl_sock_priv_init(struct list_head *priv)
 {
+	mina_debug(0, 1, "initing list_head");
 	INIT_LIST_HEAD(priv);
 }
 
@@ -822,6 +832,10 @@ void netdev_nl_sock_priv_destroy(struct list_head *priv)
 	struct net_devmem_dmabuf_binding *binding;
 	struct net_devmem_dmabuf_binding *temp;
 
-	list_for_each_entry_safe(binding, temp, priv, list)
+	mina_debug(0, 1, "destroying priv");
+
+	list_for_each_entry_safe(binding, temp, priv, list) {
+		mina_debug(0, 1, "about to unbind binding");
 		net_devmem_unbind_dmabuf(binding);
+	}
 }
