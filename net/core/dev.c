@@ -9741,6 +9741,7 @@ int dev_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf)
 
 	if (dev_get_min_mp_channel_count(dev)) {
 		NL_SET_ERR_MSG(bpf->extack, "unable to propagate XDP to device using memory provider");
+		mina_debug(0, 1, "failing bpf binding due to mp binding check\n");
 		return -EBUSY;
 	}
 
@@ -9784,6 +9785,7 @@ static int dev_xdp_install(struct net_device *dev, enum bpf_xdp_mode mode,
 
 	if (dev_get_min_mp_channel_count(dev)) {
 		NL_SET_ERR_MSG(extack, "unable to install XDP to device using memory provider");
+		mina_debug(0, 1, "failing dev_xdp_install due to mp check");
 		return -EBUSY;
 	}
 

@@ -914,6 +914,7 @@ err_unlock:
 	rtnl_unlock();
 err_genlmsg_free:
 	nlmsg_free(rsp);
+	mina_debug(0, 1, "failed: %d", err);
 	return err;
 }
 

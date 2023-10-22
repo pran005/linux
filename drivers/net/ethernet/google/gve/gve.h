@@ -1025,6 +1025,8 @@ static inline u32 gve_rx_idx_to_ntfy(struct gve_priv *priv, u32 queue_idx)
 
 static inline bool gve_is_qpl(struct gve_priv *priv)
 {
+	WARN_ON(priv->queue_format == GVE_QUEUE_FORMAT_UNSPECIFIED);
+
 	return priv->queue_format == GVE_GQI_QPL_FORMAT ||
 		priv->queue_format == GVE_DQO_QPL_FORMAT;
 }
@@ -1103,6 +1105,8 @@ static inline enum dma_data_direction gve_qpl_dma_dir(struct gve_priv *priv,
 
 static inline bool gve_is_gqi(struct gve_priv *priv)
 {
+	WARN_ON(priv->queue_format == GVE_QUEUE_FORMAT_UNSPECIFIED);
+
 	return priv->queue_format == GVE_GQI_RDA_FORMAT ||
 		priv->queue_format == GVE_GQI_QPL_FORMAT;
 }

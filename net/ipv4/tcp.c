@@ -1080,11 +1080,13 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 	if ((flags & MSG_ZEROCOPY) && size) {
 		if (msg->msg_ubuf) {
 			uarg = msg->msg_ubuf;
+			mina_debug(0, flags & MSG_SOCK_DEVMEM, "found msg->msg_ubuf");
 			if (sk->sk_route_caps & NETIF_F_SG)
 				zc = MSG_ZEROCOPY;
 		} else if (sock_flag(sk, SOCK_ZEROCOPY)) {
 			skb = tcp_write_queue_tail(sk);
 			uarg = msg_zerocopy_realloc(sk, size, skb_zcopy(skb));
+			mina_debug(0, flags & MSG_SOCK_DEVMEM, "creating uarg");
 			if (!uarg) {
 				err = -ENOBUFS;
 				goto out_err;

@@ -459,6 +459,7 @@ static void __page_pool_dma_sync_for_device(const struct page_pool *pool,
 	__dma_sync_single_for_device(pool->p.dev, dma_addr + pool->p.offset,
 				     dma_sync_size, pool->p.dma_dir);
 #endif
+	mina_debug(0, pool->mp_priv, "error: mp_priv not null, and syncing for device");
 }
 
 static __always_inline void
@@ -1121,8 +1122,9 @@ static void page_pool_release_retry(struct work_struct *wq)
 	    (!netdev || netdev == NET_PTR_POISON)) {
 		int sec = (s32)((u32)jiffies - (u32)pool->defer_start) / HZ;
 
-		pr_warn("%s() stalled pool shutdown: id %u, %d inflight %d sec\n",
-			__func__, pool->user.id, inflight, sec);
+		pr_warn("%s() stalled pool shutdown: id %u, %d inflight %d sec devmem=%d\n",
+			__func__, pool->user.id, inflight, sec,
+			pool->mp_priv != NULL);
 		pool->defer_warn = jiffies + DEFER_WARN_INTERVAL;
 	}
 

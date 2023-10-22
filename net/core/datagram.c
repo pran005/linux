@@ -719,8 +719,10 @@ zerocopy_fill_skb_from_devmem(struct sk_buff *skb, struct iov_iter *from,
 		if (!niov)
 			return -EFAULT;
 
+
 		size = min_t(size_t, size, length);
 		size = min_t(size_t, size, iter_iov_len(from));
+		// mina_debug(0, 1, "virt_addr=%zu, size=%zu", virt_addr, size);
 
 		get_netmem(net_iov_to_netmem(niov));
 		skb_add_rx_frag_netmem(skb, i, net_iov_to_netmem(niov), off,

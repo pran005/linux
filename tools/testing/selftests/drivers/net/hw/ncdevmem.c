@@ -938,7 +938,7 @@ static int do_client(struct memory_buffer *mem)
 
 		*((__u32 *)CMSG_DATA(cmsg)) = ddmabuf;
 
-		ret = sendmsg(socket_fd, &msg, MSG_ZEROCOPY);
+		ret = sendmsg(socket_fd, &msg, MSG_ZEROCOPY | MSG_SOCK_DEVMEM);
 		if (ret < 0)
 			error(1, errno, "Failed sendmsg");
 

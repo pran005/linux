@@ -373,6 +373,8 @@ int page_pool_check_memory_provider(struct net_device *dev,
 		}
 	}
 	mutex_unlock(&page_pools_lock);
+	mina_debug(0, 1, "did not find mp pp for idx=%d",
+		   get_netdev_rx_queue_index(rxq));
 	return -ENODATA;
 }
 

@@ -78,6 +78,8 @@ void __net_devmem_dmabuf_binding_free(struct work_struct *wq)
 	xa_destroy(&binding->bound_rxqs);
 	kvfree(binding->tx_vec);
 	kfree(binding);
+
+	mina_debug(0, 1, "freeing binding");
 }
 EXPORT_SYMBOL(__net_devmem_dmabuf_binding_free);
 
@@ -395,6 +397,9 @@ struct net_devmem_dmabuf_binding *net_devmem_get_binding(struct sock *sk,
 	if (!dst || !dst->dev || dst->dev->ifindex != binding->dev->ifindex) {
 		err = -ENODEV;
 		goto out_err;
+		mina_debug(0, !dst || !dst->dev, "could not find dst or dst->dev");
+		mina_debug(0, 1, "dst->dev->ifindex=%d != binding->dev->ifindex=%d",
+			   dst->dev->ifindex, binding->dev->ifindex);
 	}
 
 	return binding;

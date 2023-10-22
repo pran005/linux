@@ -729,6 +729,7 @@ int ethtool_check_max_channel(struct net_device *dev,
 	if (channels.combined_count + channels.rx_count <= max_rxfh_in_use) {
 		if (info)
 			GENL_SET_ERR_MSG_FMT(info, "requested channel counts are too low for existing indirection table (%d)", max_rxfh_in_use);
+		mina_debug(0, 1, "requested channel counts are too low for existing indirection table (%d)", max_rxfh_in_use);
 		return -EINVAL;
 	}
 	if (channels.combined_count + channels.rx_count <= max_rxnfc_in_use) {
@@ -741,6 +742,7 @@ int ethtool_check_max_channel(struct net_device *dev,
 	if (channels.combined_count + channels.rx_count <= max_mp_in_use) {
 		if (info)
 			GENL_SET_ERR_MSG_FMT(info, "requested channel counts are too low for existing memory provider setting (%d)", max_mp_in_use);
+		mina_debug(0, 1, "failing ethtool_check_max_channel binding due to mp binding check\n");
 		return -EINVAL;
 	}
 

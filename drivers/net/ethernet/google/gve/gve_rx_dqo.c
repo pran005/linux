@@ -260,6 +260,7 @@ int gve_rx_alloc_ring_dqo(struct gve_priv *priv,
 		if (IS_ERR(pool))
 			goto err;
 
+		printk("hramamurthy creating page_pool for rx q no. %d\n", rx->q_num);
 		rx->dqo.page_pool = pool;
 	} else {
 		qpl_id = gve_get_rx_qpl_id(cfg->qcfg_tx, rx->q_num);
