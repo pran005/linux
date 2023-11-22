@@ -25,6 +25,8 @@
 #include "gve_adminq.h"
 #include "gve_register.h"
 #include "gve_utils.h"
+#include <net/netdev_rx_queue.h>
+#include <net/page_pool/helpers.h>
 
 #define GVE_DEFAULT_RX_COPYBREAK	(256)
 
