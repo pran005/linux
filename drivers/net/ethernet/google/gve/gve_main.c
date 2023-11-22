@@ -1946,6 +1946,8 @@ struct gve_per_rx_queue_mem_dqo {
 	u16 header_buf_size;
 	struct gve_header_buf hdr_bufs;
 
+	struct page_pool *pp;
+
 	struct gve_rx_compl_desc_dqo *complq_desc_ring;
 	dma_addr_t complq_bus;
 
@@ -2008,6 +2010,8 @@ static int gve_rx_queue_stop(struct net_device *dev, int idx,
 
 	per_q_mem->hdr_bufs = rx->dqo.hdr_bufs;
 
+	per_q_mem->pp = rx->dqo.pp;
+
 	per_q_mem->complq_desc_ring = rx->dqo.complq.desc_ring;
 	per_q_mem->complq_bus = rx->dqo.complq.bus;
 
@@ -2057,7 +2061,7 @@ static void gve_rx_queue_mem_free(struct net_device *dev, void *per_q_mem)
 
 	for (i = 0; i < gve_q_mem->num_buf_states; i++) {
 		bs = &gve_q_mem->buf_states[i];
-		if (bs->page_info.page)
+		if (bs->page_info.netmem)
 			gve_free_page_dqo(priv, bs, true);
 	}
 
@@ -2091,13 +2095,18 @@ static void gve_rx_queue_mem_free(struct net_device *dev, void *per_q_mem)
 		gve_q_mem->hdr_bufs.data = NULL;
 	}
 
+	if (gve_q_mem->pp)
+		page_pool_destroy(gve_q_mem->pp);
+
 	kvfree(per_q_mem);
 }
 
 static void *gve_rx_queue_mem_alloc(struct net_device *dev, int idx)
 {
 	struct gve_per_rx_queue_mem_dqo *gve_q_mem;
+	struct page_pool_params pp_params = { 0 };
 	struct gve_priv *priv = netdev_priv(dev);
+	struct gve_rx_ring *rx = &priv->rx[idx];
 	struct device *hdev = &priv->pdev->dev;
 	size_t size;
 
@@ -2133,6 +2142,18 @@ static void *gve_rx_queue_mem_alloc(struct net_device *dev, int idx)
 				gve_q_mem->buffer_queue_slots,
 				&gve_q_mem->hdr_bufs.addr, GFP_KERNEL);
 	if (!gve_q_mem->hdr_bufs.data)
+		goto err;
+
+	/* Create a page_pool and register it with rxq */
+	pp_params.order = 0;
+	pp_params.pool_size = rx->dqo.num_buf_states;
+	pp_params.nid = NUMA_NO_NODE;
+	pp_params.dev = &priv->pdev->dev;
+	pp_params.netdev = dev;
+	pp_params.flags = PP_FLAG_DMA_MAP;
+	pp_params.dma_dir = DMA_FROM_DEVICE;
+	gve_q_mem->pp = page_pool_create(&pp_params);
+	if (IS_ERR(gve_q_mem->pp))
 		goto err;
 
 	size = sizeof(struct gve_rx_compl_desc_dqo) *
@@ -2201,6 +2222,8 @@ static int gve_rx_queue_start(struct net_device *dev, int idx, void *per_q_mem)
 	rx->dqo.buf_states = gve_q_mem->buf_states;
 
 	rx->dqo.hdr_bufs = gve_q_mem->hdr_bufs;
+
+	rx->dqo.pp = gve_q_mem->pp;
 
 	/* Set up linked list of buffer IDs */
 	for (i = 0; i < rx->dqo.num_buf_states - 1; i++)

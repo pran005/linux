@@ -211,6 +211,8 @@ static int gve_rx_alloc_ring_dqo(struct gve_priv *priv,
 				 int idx)
 {
 	struct page_pool_params pp_params = { 0 };
+	// TODO is this rx ring important
+	// struct gve_rx_ring *rx = &priv->rx[idx];
 	struct device *hdev = &priv->pdev->dev;
 	size_t size;
 	int i;
