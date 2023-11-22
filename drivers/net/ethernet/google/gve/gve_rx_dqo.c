@@ -19,9 +19,8 @@
 #include <net/page_pool/types.h>
 #include <net/netdev_rx_queue.h>
 
-static void gve_free_page_dqo(struct gve_priv *priv,
-			      struct gve_rx_buf_state_dqo *bs,
-			      bool free_page)
+void gve_free_page_dqo(struct gve_priv *priv, struct gve_rx_buf_state_dqo *bs,
+		       bool free_page)
 {
 	if (free_page)
 		gve_free_page(&priv->pdev->dev, bs->page_info.netmem, bs->addr,
