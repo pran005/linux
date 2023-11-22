@@ -199,7 +199,8 @@ static int gve_rx_prefill_pages(struct gve_rx_ring *rx,
 			struct page *page = rx->data.qpl->pages[i];
 			dma_addr_t addr = i * PAGE_SIZE;
 
-			gve_setup_rx_buffer(&rx->data.page_info[i], addr, page,
+			gve_setup_rx_buffer(&rx->data.page_info[i], addr,
+					    page,
 					    &rx->data.data_ring[i].qpl_offset);
 			continue;
 		}
