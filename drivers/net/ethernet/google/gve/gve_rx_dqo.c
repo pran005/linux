@@ -232,7 +232,7 @@ static int gve_rx_alloc_ring_dqo(struct gve_priv *priv,
 	rx->ctx.skb_tail = NULL;
 
 	rx->dqo.num_buf_states = cfg->raw_addressing ?
-		min_t(s16, S16_MAX, buffer_queue_slots * 4) :
+		min_t(s16, S16_MAX, buffer_queue_slots * 8) :
 		priv->rx_pages_per_qpl;
 	rx->dqo.buf_states = kvcalloc(rx->dqo.num_buf_states,
 				      sizeof(rx->dqo.buf_states[0]),
