@@ -27,9 +27,9 @@ static void gve_free_page_dqo(struct gve_priv *priv,
 {
 	page_ref_sub(bs->page_info.page, bs->page_info.pagecnt_bias - 1);
 	if (free_page)
-		gve_free_page(&priv->pdev->dev, bs->page_info.page, bs->addr,
+		gve_free_page(&priv->pdev->dev, bs->page_info.netmem, bs->addr,
 			      DMA_FROM_DEVICE);
-	bs->page_info.page = NULL;
+	bs->page_info.netmem = 0;
 }
 
 static struct gve_rx_buf_state_dqo *gve_alloc_buf_state(struct gve_rx_ring *rx)
@@ -171,9 +171,11 @@ static int gve_alloc_page_dqo(struct gve_rx_ring *rx,
 		int err;
 
 		err = gve_alloc_page(priv, &priv->pdev->dev,
-				     &buf_state->page_info.page,
+				     &buf_state->page_info.netmem,
 				     &buf_state->addr,
-				     DMA_FROM_DEVICE, GFP_ATOMIC);
+				     DMA_FROM_DEVICE,
+				     GFP_ATOMIC,
+				     rx);
 		if (err)
 			return err;
 	} else {
@@ -183,10 +185,11 @@ static int gve_alloc_page_dqo(struct gve_rx_ring *rx,
 					    priv->dev->name);
 			return -ENOMEM;
 		}
-		buf_state->page_info.page = rx->dqo.qpl->pages[idx];
+		buf_state->page_info.netmem = page_to_netmem(rx->dqo.qpl->pages[idx]);
 		buf_state->addr = rx->dqo.qpl->page_buses[idx];
 		rx->dqo.next_qpl_page_idx++;
 	}
+	buf_state->addr = page_pool_get_dma_addr_netmem(buf_state->page_info.netmem);
 	buf_state->page_info.page_offset = 0;
 	buf_state->page_info.page_address =
 		page_address(buf_state->page_info.page);
@@ -244,7 +247,7 @@ static void gve_rx_free_ring_dqo(struct gve_priv *priv, struct gve_rx_ring *rx,
 	for (i = 0; i < rx->dqo.num_buf_states; i++) {
 		struct gve_rx_buf_state_dqo *bs = &rx->dqo.buf_states[i];
 		/* Only free page for RDA. QPL pages are freed in gve_main. */
-		if (bs->page_info.page)
+		if (bs->page_info.netmem && bs->next == i)
 			gve_free_page_dqo(priv, bs, !rx->dqo.qpl);
 	}
 	if (rx->dqo.qpl) {
@@ -271,6 +274,9 @@ static void gve_rx_free_ring_dqo(struct gve_priv *priv, struct gve_rx_ring *rx,
 	rx->dqo.buf_states = NULL;
 
 	gve_rx_free_hdr_bufs(priv, rx);
+
+	if (rx->dqo.pp)
+		page_pool_destroy(rx->dqo.pp);
 
 	netif_dbg(priv, drv, priv->dev, "freed rx ring %d\n", idx);
 }
@@ -301,6 +307,7 @@ static int gve_rx_alloc_ring_dqo(struct gve_priv *priv,
 				 struct gve_rx_ring *rx,
 				 int idx)
 {
+	struct page_pool_params pp_params = { 0 };
 	struct device *hdev = &priv->pdev->dev;
 	size_t size;
 	int i;
@@ -333,6 +340,19 @@ static int gve_rx_alloc_ring_dqo(struct gve_priv *priv,
 	if (cfg->enable_header_split)
 		if (gve_rx_alloc_hdr_bufs(priv, rx))
 			goto err;
+
+	/* Create a page_pool and register it with rxq */
+	pp_params.order			= 0;
+	pp_params.pool_size		= rx->dqo.num_buf_states;
+	pp_params.nid			= NUMA_NO_NODE;
+	pp_params.dev			= &priv->pdev->dev;
+	pp_params.netdev		= priv->dev;
+	pp_params.flags			= PP_FLAG_DMA_MAP;
+	pp_params.dma_dir		= DMA_FROM_DEVICE;
+
+	rx->dqo.pp = page_pool_create(&pp_params);
+	if (IS_ERR(rx->dqo.pp))
+		BUG();
 
 	/* Set up linked list of buffer IDs */
 	for (i = 0; i < rx->dqo.num_buf_states - 1; i++)
@@ -662,8 +682,8 @@ static int gve_rx_append_frags(struct napi_struct *napi,
 	if (gve_rx_should_trigger_copy_ondemand(rx))
 		return gve_rx_copy_ondemand(rx, buf_state, buf_len);
 
-	skb_add_rx_frag(rx->ctx.skb_tail, num_frags,
-			buf_state->page_info.page,
+	skb_add_rx_frag_netmem(rx->ctx.skb_tail, num_frags,
+			buf_state->page_info.netmem,
 			buf_state->page_info.page_offset,
 			buf_len, priv->data_buffer_size_dqo);
 	gve_dec_pagecnt_bias(&buf_state->page_info);
@@ -782,7 +802,7 @@ static int gve_rx_dqo(struct napi_struct *napi, struct gve_rx_ring *rx,
 		return 0;
 	}
 
-	skb_add_rx_frag(rx->ctx.skb_head, 0, buf_state->page_info.page,
+	skb_add_rx_frag_netmem(rx->ctx.skb_head, 0, buf_state->page_info.netmem,
 			buf_state->page_info.page_offset, buf_len,
 			priv->data_buffer_size_dqo);
 	gve_dec_pagecnt_bias(&buf_state->page_info);

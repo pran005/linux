@@ -23,6 +23,7 @@
 #include "gve_adminq.h"
 #include "gve_register.h"
 #include "gve_utils.h"
+#include <net/page_pool/helpers.h>
 
 #define GVE_DEFAULT_RX_COPYBREAK	(256)
 
@@ -990,20 +991,17 @@ static void gve_free_rings(struct gve_priv *priv,
 }
 
 int gve_alloc_page(struct gve_priv *priv, struct device *dev,
-		   struct page **page, dma_addr_t *dma,
-		   enum dma_data_direction dir, gfp_t gfp_flags)
+		   netmem_ref *netmemp, dma_addr_t *dma,
+		   enum dma_data_direction dir, gfp_t gfp_flags,
+		   struct gve_rx_ring *rx)
 {
-	*page = alloc_page(gfp_flags);
-	if (!*page) {
+	*netmemp = page_pool_alloc_netmem(rx->dqo.pp, gfp_flags);
+
+	if (!*netmemp) {
 		priv->page_alloc_fail++;
 		return -ENOMEM;
 	}
-	*dma = dma_map_page(dev, *page, 0, PAGE_SIZE, dir);
-	if (dma_mapping_error(dev, *dma)) {
-		priv->dma_mapping_error++;
-		put_page(*page);
-		return -ENOMEM;
-	}
+
 	return 0;
 }
 
@@ -1026,9 +1024,10 @@ static int gve_alloc_queue_page_list(struct gve_priv *priv,
 		return -ENOMEM;
 
 	for (i = 0; i < pages; i++) {
-		err = gve_alloc_page(priv, &priv->pdev->dev, &qpl->pages[i],
+		err = gve_alloc_page(priv, &priv->pdev->dev,
+				     (netmem_ref *)&qpl->pages[i],
 				     &qpl->page_buses[i],
-				     gve_qpl_dma_dir(priv, id), GFP_KERNEL);
+				     gve_qpl_dma_dir(priv, id), GFP_KERNEL, NULL);
 		/* caller handles clean up */
 		if (err)
 			return -ENOMEM;
@@ -1038,13 +1037,11 @@ static int gve_alloc_queue_page_list(struct gve_priv *priv,
 	return 0;
 }
 
-void gve_free_page(struct device *dev, struct page *page, dma_addr_t dma,
+void gve_free_page(struct device *dev, netmem_ref netmem, dma_addr_t dma,
 		   enum dma_data_direction dir)
 {
-	if (!dma_mapping_error(dev, dma))
-		dma_unmap_page(dev, dma, PAGE_SIZE, dir);
-	if (page)
-		put_page(page);
+	if (netmem)
+		page_pool_put_full_netmem(netmem_get_pp(netmem), netmem, false);
 }
 
 static void gve_free_queue_page_list(struct gve_priv *priv,
@@ -1059,7 +1056,7 @@ static void gve_free_queue_page_list(struct gve_priv *priv,
 		goto free_pages;
 
 	for (i = 0; i < qpl->num_entries; i++)
-		gve_free_page(&priv->pdev->dev, qpl->pages[i],
+		gve_free_page(&priv->pdev->dev, page_to_netmem(qpl->pages[i]),
 			      qpl->page_buses[i], gve_qpl_dma_dir(priv, id));
 
 	kvfree(qpl->page_buses);

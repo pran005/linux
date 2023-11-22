@@ -94,7 +94,7 @@ struct gve_rx_desc_queue {
 
 /* The page info for a single slot in the RX data queue */
 struct gve_rx_slot_page_info {
-	struct page *page;
+	netmem_ref netmem;
 	void *page_address;
 	u32 page_offset; /* offset to write to in page */
 	int pagecnt_bias; /* expected pagecnt if only the driver has a ref */
@@ -268,6 +268,8 @@ struct gve_rx_ring {
 
 			/* Address info of the buffers for header-split */
 			struct gve_header_buf hdr_bufs;
+
+			struct page_pool *pp;
 		} dqo;
 	};
 
@@ -1165,9 +1167,10 @@ int gve_napi_poll(struct napi_struct *napi, int budget);
 
 /* buffers */
 int gve_alloc_page(struct gve_priv *priv, struct device *dev,
-		   struct page **page, dma_addr_t *dma,
-		   enum dma_data_direction, gfp_t gfp_flags);
-void gve_free_page(struct device *dev, struct page *page, dma_addr_t dma,
+		   netmem_ref *netmemp, dma_addr_t *dma,
+		   enum dma_data_direction, gfp_t gfp_flags,
+		   struct gve_rx_ring *rx);
+void gve_free_page(struct device *dev, netmem_ref netmem, dma_addr_t dma,
 		   enum dma_data_direction);
 /* tx handling */
 netdev_tx_t gve_tx(struct sk_buff *skb, struct net_device *dev);
