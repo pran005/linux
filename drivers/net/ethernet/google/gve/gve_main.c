@@ -2152,6 +2152,7 @@ static void *gve_rx_queue_mem_alloc(struct net_device *dev, int idx)
 	pp_params.netdev = dev;
 	pp_params.flags = PP_FLAG_DMA_MAP;
 	pp_params.dma_dir = DMA_FROM_DEVICE;
+	pp_params.queue = __netif_get_rx_queue(priv->dev, rx->q_num);
 	gve_q_mem->pp = page_pool_create(&pp_params);
 	if (IS_ERR(gve_q_mem->pp))
 		goto err;
