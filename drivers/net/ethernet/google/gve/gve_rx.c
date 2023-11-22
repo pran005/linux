@@ -94,12 +94,12 @@ static void gve_rx_free_ring_gqi(struct gve_priv *priv, struct gve_rx_ring *rx,
 static void gve_setup_rx_buffer(struct gve_rx_slot_page_info *page_info,
 			     dma_addr_t addr, netmem_ref netmem, __be64 *slot_addr)
 {
-	page_info->netmem = page_to_netmem(page);
+	page_info->netmem = netmem;
 	page_info->page_offset = 0;
-	page_info->page_address = page_address(page);
+	page_info->page_address = netmem_address(netmem);
 	*slot_addr = cpu_to_be64(addr);
 	/* The page already has 1 ref */
-	page_ref_add(page, INT_MAX - 1);
+	page_ref_add(netmem_to_page(netmem), INT_MAX - 1);
 	page_info->pagecnt_bias = INT_MAX;
 }
 
@@ -121,7 +121,7 @@ static int gve_rx_alloc_buffer(struct gve_priv *priv, struct device *dev,
 		return err;
 	}
 
-	gve_setup_rx_buffer(page_info, dma, netmem_to_page(netmem), &data_slot->addr);
+	gve_setup_rx_buffer(page_info, dma, netmem, &data_slot->addr);
 	return 0;
 }
 
@@ -157,7 +157,8 @@ static int gve_rx_prefill_pages(struct gve_rx_ring *rx,
 			struct page *page = rx->data.qpl->pages[i];
 			dma_addr_t addr = i * PAGE_SIZE;
 
-			gve_setup_rx_buffer(&rx->data.page_info[i], addr, page,
+			gve_setup_rx_buffer(&rx->data.page_info[i], addr,
+					    page_to_netmem(page),
 					    &rx->data.data_ring[i].qpl_offset);
 			continue;
 		}
@@ -437,7 +438,7 @@ static struct sk_buff *gve_rx_add_frags(struct napi_struct *napi,
 		ctx->skb_head->data_len += len;
 		ctx->skb_head->truesize += truesize;
 	}
-	skb_add_rx_frag(skb, num_frags, netmem_to_page(page_info->netmem),
+	skb_add_rx_frag_netmem(skb, num_frags, page_info->netmem,
 			offset, len, truesize);
 
 	return ctx->skb_head;

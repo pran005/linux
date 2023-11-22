@@ -8,6 +8,7 @@
 #include "gve.h"
 #include "gve_adminq.h"
 #include "gve_dqo.h"
+#include <net/netdev_rx_queue.h>
 
 static void gve_get_drvinfo(struct net_device *netdev,
 			    struct ethtool_drvinfo *info)
@@ -447,6 +448,11 @@ static void gve_get_channels(struct net_device *netdev,
 	cmd->tx_count = priv->tx_cfg.num_queues;
 	cmd->other_count = 0;
 	cmd->combined_count = 0;
+
+	for (int i = 0; i < netdev->num_rx_queues; i++) {
+		pr_err("queue %2d is bound=%d\n", i,
+		       !!READ_ONCE(__netif_get_rx_queue(netdev, i)->mp_params.mp_priv));
+	}
 }
 
 static int gve_set_channels(struct net_device *netdev,
