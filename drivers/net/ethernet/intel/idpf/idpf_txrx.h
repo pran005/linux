@@ -380,6 +380,7 @@ struct idpf_intr_reg {
 
 /**
  * struct idpf_q_vector
+ * @csd: XSk wakeup CSD
  * @vport: Vport back pointer
  * @napi: napi handler
  * @total_events: Number of interrupts processed
@@ -424,9 +425,11 @@ struct idpf_q_vector {
 		struct idpf_intr_reg intr_reg;
 	);
 	libeth_cacheline_group(read_write,
-		struct napi_struct napi;
+		call_single_data_t csd;
+
 		u16 total_events;
 		bool wb_on_itr;
+		struct napi_struct napi;
 
 		struct dim tx_dim;
 		u16 tx_itr_value;
@@ -445,7 +448,7 @@ struct idpf_q_vector {
 	);
 };
 libeth_cacheline_set_assert(struct idpf_q_vector, 128,
-			    424 + 2 * sizeof(struct dim),
+			    456 + 2 * sizeof(struct dim),
 			    8 + sizeof(cpumask_var_t));
 
 #define IDPF_ITR_DYNAMIC	1
