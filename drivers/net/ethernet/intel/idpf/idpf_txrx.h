@@ -498,6 +498,8 @@ struct idpf_txq_stash {
  * @num_xdp_txq: total number of XDP Tx queues
  * @truesize: data buffer truesize in singleq
  * @xdp: XDP buffer with the current frame
+ * @pool: XSk pool if installed
+ * @xsk: current XDP buffer in XSk mode
  * @stats: per-queue RQ stats
  * @q_id: Queue id
  * @size: Length of descriptor ring in bytes
@@ -550,7 +552,13 @@ struct idpf_rx_queue {
 		u16 next_to_clean;
 		u16 next_to_alloc;
 
-		struct libeth_xdp_buff_stash xdp;
+		union {
+			struct libeth_xdp_buff_stash xdp;
+			struct {
+				struct libeth_xdp_buff *xsk;
+				struct xsk_buff_pool *pool;
+			};
+		};
 
 		struct libeth_rq_stats stats;
 	);
@@ -732,9 +740,13 @@ libeth_cacheline_set_assert(struct idpf_tx_queue, 64,
  * struct idpf_buf_queue - software structure represting a buffer queue
  * @hdr_buf: &libeth_fqe for header buffers
  * @buf: &libeth_fqe for data buffers
+ * @xsk_buf: &xdp_buff for XSk Rx buffers
  * @split_buf: Descriptor ring memory
  * @hdr_pp: &page_pool for header buffers
  * @pp: &page_pool for data buffers
+ * @pool: &xsk_buff_pool on XSk queues
+ * @pending: number of buffers to refill (Xsk)
+ * @thresh: refill threshold in XSk
  * @tail: Tail offset
  * @flags: See enum idpf_queue_flags_t
  * @desc_count: Number of descriptors
@@ -754,20 +766,31 @@ libeth_cacheline_set_assert(struct idpf_tx_queue, 64,
 struct idpf_buf_queue {
 	libeth_cacheline_group(read_mostly,
 		struct virtchnl2_splitq_rx_buf_desc *split_buf;
+		union {
+			struct {
+				struct libeth_fqe *buf;
+				struct page_pool *pp;
+			};
+			struct {
+				struct libeth_xdp_buff **xsk_buf;
+				struct xsk_buff_pool *pool;
+			};
+		};
 		struct libeth_fqe *hdr_buf;
 		struct page_pool *hdr_pp;
-		struct libeth_fqe *buf;
-		struct page_pool *pp;
 		void __iomem *tail;
 
 		DECLARE_BITMAP(flags, __IDPF_Q_FLAGS_NBITS);
 		u32 desc_count;
+
+		u32 thresh;
 	);
 	libeth_cacheline_group(read_write,
 		u32 next_to_use;
 		u32 next_to_clean;
 		u32 next_to_alloc;
 
+		u32 pending;
 		u32 hdr_truesize;
 		u32 truesize;
 	);
@@ -783,7 +806,7 @@ struct idpf_buf_queue {
 		u16 rx_buf_size;
 	);
 };
-libeth_cacheline_set_assert(struct idpf_buf_queue, 60, 20, 32);
+libeth_cacheline_set_assert(struct idpf_buf_queue, 64, 24, 32);
 
 /**
  * struct idpf_compl_queue - software structure represting a completion queue
@@ -1087,8 +1110,12 @@ netdev_tx_t idpf_tx_start(struct sk_buff *skb, struct net_device *netdev);
 bool idpf_rx_singleq_buf_hw_alloc_all(struct idpf_rx_queue *rxq,
 				      u16 cleaned_count);
 
+struct libeth_rq_napi_stats;
 struct libeth_sq_xmit_stats;
 
+bool idpf_rx_process_skb_fields(struct sk_buff *skb,
+				const struct libeth_xdp_buff *xdp,
+				struct libeth_rq_napi_stats *ss);
 int idpf_tso(struct sk_buff *skb, struct idpf_tx_offload_params *off,
 	     struct libeth_sq_xmit_stats *ss);
 
