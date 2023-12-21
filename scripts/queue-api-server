@@ -1,0 +1,14 @@
+#! /bin/sh
+#
+#
+set -ex
+
+toolbox iperf3 -s &
+
+i=0
+while true; do
+	i=$(($i + 1))
+	./ncdevmem
+	sleep 1;
+	echo iteration $i done.
+done

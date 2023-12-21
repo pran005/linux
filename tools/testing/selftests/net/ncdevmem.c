@@ -73,6 +73,7 @@ static unsigned int ifindex = 3;
 static char *nic_pci_addr = "0000:06:00.0";
 static unsigned int iterations;
 static unsigned int dmabuf_id;
+static int bind_only = 0;
 
 void print_bytes(void *ptr, size_t size)
 {
@@ -281,6 +282,9 @@ int do_server(void)
 
 	if (bind_rx_queue(ifindex, buf, queues, num_queues, &ys))
 		error(1, 0, "Failed to bind\n");
+
+	if (bind_only)
+		return 0;
 
 	buf_mem = mmap(NULL, dmabuf_size, PROT_READ | PROT_WRITE, MAP_SHARED,
 		       buf, 0);
@@ -493,7 +497,7 @@ int main(int argc, char *argv[])
 {
 	int is_server = 0, opt;
 
-	while ((opt = getopt(argc, argv, "ls:c:p:v:q:f:n:i:d:")) != -1) {
+	while ((opt = getopt(argc, argv, "ls:c:p:v:q:f:n:i:d:b")) != -1) {
 		switch (opt) {
 		case 'l':
 			is_server = 1;
@@ -527,6 +531,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'i':
 			iterations = atoll(optarg);
+			break;
+		case 'b':
+			bind_only = 1;
 			break;
 		case '?':
 			printf("unknown option: %c\n", optopt);
