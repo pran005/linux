@@ -5118,13 +5118,15 @@ static u32 i40e_get_rxfh_indir_size(struct net_device *netdev)
 /**
  * i40e_get_rxfh - get the rx flow hash indirection table
  * @netdev: network interface device structure
- * @rxfh: pointer to param struct (indir, key, hfunc)
+ * @indir: indirection table
+ * @key: hash key
+ * @hfunc: hash function
  *
  * Reads the indirection table directly from the hardware. Returns 0 on
  * success.
  **/
-static int i40e_get_rxfh(struct net_device *netdev,
-			 struct ethtool_rxfh_param *rxfh)
+static int i40e_get_rxfh(struct net_device *netdev, u32 *indir, u8 *key,
+			 u8 *hfunc)
 {
 	struct i40e_netdev_priv *np = netdev_priv(netdev);
 	struct i40e_vsi *vsi = np->vsi;
@@ -5132,12 +5134,13 @@ static int i40e_get_rxfh(struct net_device *netdev,
 	int ret;
 	u16 i;
 
-	rxfh->hfunc = ETH_RSS_HASH_TOP;
+	if (hfunc)
+		*hfunc = ETH_RSS_HASH_TOP;
 
-	if (!rxfh->indir)
+	if (!indir)
 		return 0;
 
-	seed = rxfh->key;
+	seed = key;
 	lut = kzalloc(I40E_HLUT_ARRAY_SIZE, GFP_KERNEL);
 	if (!lut)
 		return -ENOMEM;
@@ -5145,7 +5148,7 @@ static int i40e_get_rxfh(struct net_device *netdev,
 	if (ret)
 		goto out;
 	for (i = 0; i < I40E_HLUT_ARRAY_SIZE; i++)
-		rxfh->indir[i] = (u32)(lut[i]);
+		indir[i] = (u32)(lut[i]);
 
 out:
 	kfree(lut);
@@ -5156,15 +5159,15 @@ out:
 /**
  * i40e_set_rxfh - set the rx flow hash indirection table
  * @netdev: network interface device structure
- * @rxfh: pointer to param struct (indir, key, hfunc)
- * @extack: extended ACK from the Netlink message
+ * @indir: indirection table
+ * @key: hash key
+ * @hfunc: hash function to use
  *
  * Returns -EINVAL if the table specifies an invalid queue id, otherwise
  * returns 0 after programming the table.
  **/
-static int i40e_set_rxfh(struct net_device *netdev,
-			 struct ethtool_rxfh_param *rxfh,
-			 struct netlink_ext_ack *extack)
+static int i40e_set_rxfh(struct net_device *netdev, const u32 *indir,
+			 const u8 *key, const u8 hfunc)
 {
 	struct i40e_netdev_priv *np = netdev_priv(netdev);
 	struct i40e_vsi *vsi = np->vsi;
@@ -5172,18 +5175,17 @@ static int i40e_set_rxfh(struct net_device *netdev,
 	u8 *seed = NULL;
 	u16 i;
 
-	if (rxfh->hfunc != ETH_RSS_HASH_NO_CHANGE &&
-	    rxfh->hfunc != ETH_RSS_HASH_TOP)
+	if (hfunc != ETH_RSS_HASH_NO_CHANGE && hfunc != ETH_RSS_HASH_TOP)
 		return -EOPNOTSUPP;
 
-	if (rxfh->key) {
+	if (key) {
 		if (!vsi->rss_hkey_user) {
 			vsi->rss_hkey_user = kzalloc(I40E_HKEY_ARRAY_SIZE,
 						     GFP_KERNEL);
 			if (!vsi->rss_hkey_user)
 				return -ENOMEM;
 		}
-		memcpy(vsi->rss_hkey_user, rxfh->key, I40E_HKEY_ARRAY_SIZE);
+		memcpy(vsi->rss_hkey_user, key, I40E_HKEY_ARRAY_SIZE);
 		seed = vsi->rss_hkey_user;
 	}
 	if (!vsi->rss_lut_user) {
@@ -5193,9 +5195,9 @@ static int i40e_set_rxfh(struct net_device *netdev,
 	}
 
 	/* Each 32 bits pointed by 'indir' is stored with a lut entry */
-	if (rxfh->indir)
+	if (indir)
 		for (i = 0; i < I40E_HLUT_ARRAY_SIZE; i++)
-			vsi->rss_lut_user[i] = (u8)(rxfh->indir[i]);
+			vsi->rss_lut_user[i] = (u8)(indir[i]);
 	else
 		i40e_fill_rss_lut(pf, vsi->rss_lut_user, I40E_HLUT_ARRAY_SIZE,
 				  vsi->rss_size);

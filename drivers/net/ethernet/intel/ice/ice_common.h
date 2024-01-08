@@ -6,7 +6,6 @@
 
 #include <linux/bitfield.h>
 
-#include "ice.h"
 #include "ice_type.h"
 #include "ice_nvm.h"
 #include "ice_flex_pipe.h"

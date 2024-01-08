@@ -1131,42 +1131,41 @@ static u32 stmmac_get_rxfh_indir_size(struct net_device *dev)
 	return ARRAY_SIZE(priv->rss.table);
 }
 
-static int stmmac_get_rxfh(struct net_device *dev,
-			   struct ethtool_rxfh_param *rxfh)
+static int stmmac_get_rxfh(struct net_device *dev, u32 *indir, u8 *key,
+			   u8 *hfunc)
 {
 	struct stmmac_priv *priv = netdev_priv(dev);
 	int i;
 
-	if (rxfh->indir) {
+	if (indir) {
 		for (i = 0; i < ARRAY_SIZE(priv->rss.table); i++)
-			rxfh->indir[i] = priv->rss.table[i];
+			indir[i] = priv->rss.table[i];
 	}
 
-	if (rxfh->key)
-		memcpy(rxfh->key, priv->rss.key, sizeof(priv->rss.key));
-	rxfh->hfunc = ETH_RSS_HASH_TOP;
+	if (key)
+		memcpy(key, priv->rss.key, sizeof(priv->rss.key));
+	if (hfunc)
+		*hfunc = ETH_RSS_HASH_TOP;
 
 	return 0;
 }
 
-static int stmmac_set_rxfh(struct net_device *dev,
-			   struct ethtool_rxfh_param *rxfh,
-			   struct netlink_ext_ack *extack)
+static int stmmac_set_rxfh(struct net_device *dev, const u32 *indir,
+			   const u8 *key, const u8 hfunc)
 {
 	struct stmmac_priv *priv = netdev_priv(dev);
 	int i;
 
-	if (rxfh->hfunc != ETH_RSS_HASH_NO_CHANGE &&
-	    rxfh->hfunc != ETH_RSS_HASH_TOP)
+	if ((hfunc != ETH_RSS_HASH_NO_CHANGE) && (hfunc != ETH_RSS_HASH_TOP))
 		return -EOPNOTSUPP;
 
-	if (rxfh->indir) {
+	if (indir) {
 		for (i = 0; i < ARRAY_SIZE(priv->rss.table); i++)
-			priv->rss.table[i] = rxfh->indir[i];
+			priv->rss.table[i] = indir[i];
 	}
 
-	if (rxfh->key)
-		memcpy(priv->rss.key, rxfh->key, sizeof(priv->rss.key));
+	if (key)
+		memcpy(priv->rss.key, key, sizeof(priv->rss.key));
 
 	return stmmac_rss_configure(priv, priv->hw, &priv->rss,
 				    priv->plat->rx_queues_to_use);

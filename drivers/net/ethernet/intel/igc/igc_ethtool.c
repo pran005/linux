@@ -1462,46 +1462,45 @@ static u32 igc_ethtool_get_rxfh_indir_size(struct net_device *netdev)
 	return IGC_RETA_SIZE;
 }
 
-static int igc_ethtool_get_rxfh(struct net_device *netdev,
-				struct ethtool_rxfh_param *rxfh)
+static int igc_ethtool_get_rxfh(struct net_device *netdev, u32 *indir, u8 *key,
+				u8 *hfunc)
 {
 	struct igc_adapter *adapter = netdev_priv(netdev);
 	int i;
 
-	rxfh->hfunc = ETH_RSS_HASH_TOP;
-	if (!rxfh->indir)
+	if (hfunc)
+		*hfunc = ETH_RSS_HASH_TOP;
+	if (!indir)
 		return 0;
 	for (i = 0; i < IGC_RETA_SIZE; i++)
-		rxfh->indir[i] = adapter->rss_indir_tbl[i];
+		indir[i] = adapter->rss_indir_tbl[i];
 
 	return 0;
 }
 
-static int igc_ethtool_set_rxfh(struct net_device *netdev,
-				struct ethtool_rxfh_param *rxfh,
-				struct netlink_ext_ack *extack)
+static int igc_ethtool_set_rxfh(struct net_device *netdev, const u32 *indir,
+				const u8 *key, const u8 hfunc)
 {
 	struct igc_adapter *adapter = netdev_priv(netdev);
 	u32 num_queues;
 	int i;
 
 	/* We do not allow change in unsupported parameters */
-	if (rxfh->key ||
-	    (rxfh->hfunc != ETH_RSS_HASH_NO_CHANGE &&
-	     rxfh->hfunc != ETH_RSS_HASH_TOP))
+	if (key ||
+	    (hfunc != ETH_RSS_HASH_NO_CHANGE && hfunc != ETH_RSS_HASH_TOP))
 		return -EOPNOTSUPP;
-	if (!rxfh->indir)
+	if (!indir)
 		return 0;
 
 	num_queues = adapter->rss_queues;
 
 	/* Verify user input. */
 	for (i = 0; i < IGC_RETA_SIZE; i++)
-		if (rxfh->indir[i] >= num_queues)
+		if (indir[i] >= num_queues)
 			return -EINVAL;
 
 	for (i = 0; i < IGC_RETA_SIZE; i++)
-		adapter->rss_indir_tbl[i] = rxfh->indir[i];
+		adapter->rss_indir_tbl[i] = indir[i];
 
 	igc_write_rss_indir_tbl(adapter);
 

@@ -1136,26 +1136,27 @@ vmxnet3_get_rss_indir_size(struct net_device *netdev)
 }
 
 static int
-vmxnet3_get_rss(struct net_device *netdev, struct ethtool_rxfh_param *rxfh)
+vmxnet3_get_rss(struct net_device *netdev, u32 *p, u8 *key, u8 *hfunc)
 {
 	struct vmxnet3_adapter *adapter = netdev_priv(netdev);
 	struct UPT1_RSSConf *rssConf = adapter->rss_conf;
 	unsigned int n = rssConf->indTableSize;
 
-	rxfh->hfunc = ETH_RSS_HASH_TOP;
-	if (!rxfh->indir)
+	if (hfunc)
+		*hfunc = ETH_RSS_HASH_TOP;
+	if (!p)
 		return 0;
 	if (n > UPT1_RSS_MAX_IND_TABLE_SIZE)
 		return 0;
 	while (n--)
-		rxfh->indir[n] = rssConf->indTable[n];
+		p[n] = rssConf->indTable[n];
 	return 0;
 
 }
 
 static int
-vmxnet3_set_rss(struct net_device *netdev, struct ethtool_rxfh_param *rxfh,
-		struct netlink_ext_ack *extack)
+vmxnet3_set_rss(struct net_device *netdev, const u32 *p, const u8 *key,
+		const u8 hfunc)
 {
 	unsigned int i;
 	unsigned long flags;
@@ -1163,14 +1164,13 @@ vmxnet3_set_rss(struct net_device *netdev, struct ethtool_rxfh_param *rxfh,
 	struct UPT1_RSSConf *rssConf = adapter->rss_conf;
 
 	/* We do not allow change in unsupported parameters */
-	if (rxfh->key ||
-	    (rxfh->hfunc != ETH_RSS_HASH_NO_CHANGE &&
-	     rxfh->hfunc != ETH_RSS_HASH_TOP))
+	if (key ||
+	    (hfunc != ETH_RSS_HASH_NO_CHANGE && hfunc != ETH_RSS_HASH_TOP))
 		return -EOPNOTSUPP;
-	if (!rxfh->indir)
+	if (!p)
 		return 0;
 	for (i = 0; i < rssConf->indTableSize; i++)
-		rssConf->indTable[i] = rxfh->indir[i];
+		rssConf->indTable[i] = p[i];
 
 	spin_lock_irqsave(&adapter->cmd_lock, flags);
 	VMXNET3_WRITE_BAR1_REG(adapter, VMXNET3_REG_CMD,

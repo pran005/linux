@@ -800,15 +800,15 @@ static int ena_indirection_table_get(struct ena_adapter *adapter, u32 *indir)
 	return rc;
 }
 
-static int ena_get_rxfh(struct net_device *netdev,
-			struct ethtool_rxfh_param *rxfh)
+static int ena_get_rxfh(struct net_device *netdev, u32 *indir, u8 *key,
+			u8 *hfunc)
 {
 	struct ena_adapter *adapter = netdev_priv(netdev);
 	enum ena_admin_hash_functions ena_func;
 	u8 func;
 	int rc;
 
-	rc = ena_indirection_table_get(adapter, rxfh->indir);
+	rc = ena_indirection_table_get(adapter, indir);
 	if (rc)
 		return rc;
 
@@ -823,7 +823,7 @@ static int ena_get_rxfh(struct net_device *netdev,
 		return rc;
 	}
 
-	rc = ena_com_get_hash_key(adapter->ena_dev, rxfh->key);
+	rc = ena_com_get_hash_key(adapter->ena_dev, key);
 	if (rc)
 		return rc;
 
@@ -840,27 +840,27 @@ static int ena_get_rxfh(struct net_device *netdev,
 		return -EOPNOTSUPP;
 	}
 
-	rxfh->hfunc = func;
+	if (hfunc)
+		*hfunc = func;
 
 	return 0;
 }
 
-static int ena_set_rxfh(struct net_device *netdev,
-			struct ethtool_rxfh_param *rxfh,
-			struct netlink_ext_ack *extack)
+static int ena_set_rxfh(struct net_device *netdev, const u32 *indir,
+			const u8 *key, const u8 hfunc)
 {
 	struct ena_adapter *adapter = netdev_priv(netdev);
 	struct ena_com_dev *ena_dev = adapter->ena_dev;
 	enum ena_admin_hash_functions func = 0;
 	int rc;
 
-	if (rxfh->indir) {
-		rc = ena_indirection_table_set(adapter, rxfh->indir);
+	if (indir) {
+		rc = ena_indirection_table_set(adapter, indir);
 		if (rc)
 			return rc;
 	}
 
-	switch (rxfh->hfunc) {
+	switch (hfunc) {
 	case ETH_RSS_HASH_NO_CHANGE:
 		func = ena_com_get_current_hash_function(ena_dev);
 		break;
@@ -872,12 +872,12 @@ static int ena_set_rxfh(struct net_device *netdev,
 		break;
 	default:
 		netif_err(adapter, drv, netdev, "Unsupported hfunc %d\n",
-			  rxfh->hfunc);
+			  hfunc);
 		return -EOPNOTSUPP;
 	}
 
-	if (rxfh->key || func) {
-		rc = ena_com_fill_hash_function(ena_dev, func, rxfh->key,
+	if (key || func) {
+		rc = ena_com_fill_hash_function(ena_dev, func, key,
 						ENA_HASH_KEY_SIZE,
 						0xFFFFFFFF);
 		if (unlikely(rc)) {

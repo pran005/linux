@@ -1756,8 +1756,8 @@ static u32 netvsc_rss_indir_size(struct net_device *dev)
 	return ndc->rx_table_sz;
 }
 
-static int netvsc_get_rxfh(struct net_device *dev,
-			   struct ethtool_rxfh_param *rxfh)
+static int netvsc_get_rxfh(struct net_device *dev, u32 *indir, u8 *key,
+			   u8 *hfunc)
 {
 	struct net_device_context *ndc = netdev_priv(dev);
 	struct netvsc_device *ndev = rtnl_dereference(ndc->nvdev);
@@ -1767,49 +1767,47 @@ static int netvsc_get_rxfh(struct net_device *dev,
 	if (!ndev)
 		return -ENODEV;
 
-	rxfh->hfunc = ETH_RSS_HASH_TOP;	/* Toeplitz */
+	if (hfunc)
+		*hfunc = ETH_RSS_HASH_TOP;	/* Toeplitz */
 
 	rndis_dev = ndev->extension;
-	if (rxfh->indir) {
+	if (indir) {
 		for (i = 0; i < ndc->rx_table_sz; i++)
-			rxfh->indir[i] = ndc->rx_table[i];
+			indir[i] = ndc->rx_table[i];
 	}
 
-	if (rxfh->key)
-		memcpy(rxfh->key, rndis_dev->rss_key, NETVSC_HASH_KEYLEN);
+	if (key)
+		memcpy(key, rndis_dev->rss_key, NETVSC_HASH_KEYLEN);
 
 	return 0;
 }
 
-static int netvsc_set_rxfh(struct net_device *dev,
-			   struct ethtool_rxfh_param *rxfh,
-			   struct netlink_ext_ack *extack)
+static int netvsc_set_rxfh(struct net_device *dev, const u32 *indir,
+			   const u8 *key, const u8 hfunc)
 {
 	struct net_device_context *ndc = netdev_priv(dev);
 	struct netvsc_device *ndev = rtnl_dereference(ndc->nvdev);
 	struct rndis_device *rndis_dev;
-	u8 *key = rxfh->key;
 	int i;
 
 	if (!ndev)
 		return -ENODEV;
 
-	if (rxfh->hfunc != ETH_RSS_HASH_NO_CHANGE &&
-	    rxfh->hfunc != ETH_RSS_HASH_TOP)
+	if (hfunc != ETH_RSS_HASH_NO_CHANGE && hfunc != ETH_RSS_HASH_TOP)
 		return -EOPNOTSUPP;
 
 	rndis_dev = ndev->extension;
-	if (rxfh->indir) {
+	if (indir) {
 		for (i = 0; i < ndc->rx_table_sz; i++)
-			if (rxfh->indir[i] >= ndev->num_chn)
+			if (indir[i] >= ndev->num_chn)
 				return -EINVAL;
 
 		for (i = 0; i < ndc->rx_table_sz; i++)
-			ndc->rx_table[i] = rxfh->indir[i];
+			ndc->rx_table[i] = indir[i];
 	}
 
 	if (!key) {
-		if (!rxfh->indir)
+		if (!indir)
 			return 0;
 
 		key = rndis_dev->rss_key;

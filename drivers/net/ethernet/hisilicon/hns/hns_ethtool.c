@@ -1186,7 +1186,7 @@ hns_get_rss_indir_size(struct net_device *netdev)
 }
 
 static int
-hns_get_rss(struct net_device *netdev, struct ethtool_rxfh_param *rxfh)
+hns_get_rss(struct net_device *netdev, u32 *indir, u8 *key, u8 *hfunc)
 {
 	struct hns_nic_priv *priv = netdev_priv(netdev);
 	struct hnae_ae_ops *ops;
@@ -1199,16 +1199,15 @@ hns_get_rss(struct net_device *netdev, struct ethtool_rxfh_param *rxfh)
 
 	ops = priv->ae_handle->dev->ops;
 
-	if (!rxfh->indir)
+	if (!indir)
 		return 0;
 
-	return ops->get_rss(priv->ae_handle,
-			    rxfh->indir, rxfh->key, &rxfh->hfunc);
+	return ops->get_rss(priv->ae_handle, indir, key, hfunc);
 }
 
 static int
-hns_set_rss(struct net_device *netdev, struct ethtool_rxfh_param *rxfh,
-	    struct netlink_ext_ack *extack)
+hns_set_rss(struct net_device *netdev, const u32 *indir, const u8 *key,
+	    const u8 hfunc)
 {
 	struct hns_nic_priv *priv = netdev_priv(netdev);
 	struct hnae_ae_ops *ops;
@@ -1221,14 +1220,12 @@ hns_set_rss(struct net_device *netdev, struct ethtool_rxfh_param *rxfh,
 
 	ops = priv->ae_handle->dev->ops;
 
-	if (rxfh->hfunc != ETH_RSS_HASH_NO_CHANGE &&
-	    rxfh->hfunc != ETH_RSS_HASH_TOP) {
+	if (hfunc != ETH_RSS_HASH_NO_CHANGE && hfunc != ETH_RSS_HASH_TOP) {
 		netdev_err(netdev, "Invalid hfunc!\n");
 		return -EOPNOTSUPP;
 	}
 
-	return ops->set_rss(priv->ae_handle,
-			    rxfh->indir, rxfh->key, rxfh->hfunc);
+	return ops->set_rss(priv->ae_handle, indir, key, hfunc);
 }
 
 static int hns_get_rxnfc(struct net_device *netdev,
