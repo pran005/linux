@@ -1238,11 +1238,6 @@ static noinline_for_stack int ethtool_get_rxfh(struct net_device *dev,
 			 &dev_hfunc, sizeof(rxfh.hfunc))) {
 		ret = -EFAULT;
 	} else if (copy_to_user(useraddr +
-				offsetof(struct ethtool_rxfh, input_xfrm),
-				&rxfh_dev.input_xfrm,
-				sizeof(rxfh.input_xfrm))) {
-		ret = -EFAULT;
-	} else if (copy_to_user(useraddr +
 			      offsetof(struct ethtool_rxfh, rss_config[0]),
 			      rss_config, total_size)) {
 		ret = -EFAULT;
