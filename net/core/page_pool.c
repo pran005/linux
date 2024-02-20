@@ -234,8 +234,6 @@ static int page_pool_init(struct page_pool *pool,
 		 */
 	}
 
-	pool->has_init_callback = !!pool->slow.init_callback;
-
 #ifdef CONFIG_PAGE_POOL_STATS
 	if (!(pool->slow.flags & PP_FLAG_SYSTEM_POOL)) {
 		pool->recycle_stats = alloc_percpu(struct page_pool_recycle_stats);
@@ -465,8 +463,6 @@ static void page_pool_set_pp_info(struct page_pool *pool,
 	 * the overhead is negligible.
 	 */
 	page_pool_fragment_page(page, 1);
-	if (pool->has_init_callback)
-		pool->slow.init_callback(page, pool->slow.init_arg);
 }
 
 static void page_pool_clear_pp_info(struct page *page)
