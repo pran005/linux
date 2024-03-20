@@ -127,7 +127,7 @@ do {								\
  */
 #define IDPF_TX_COMPLQ_PENDING(txq)	\
 	(((txq)->num_completions_pending >= (txq)->complq->num_completions ? \
-	0 : U64_MAX) + \
+	0 : U32_MAX) + \
 	(txq)->num_completions_pending - (txq)->complq->num_completions)
 
 #define IDPF_TX_SPLITQ_COMPL_TAG_WIDTH	16
@@ -778,7 +778,7 @@ struct idpf_compl_queue {
 		u32 next_to_use;
 		u32 next_to_clean;
 
-		u32 num_completions;
+		aligned_u64 num_completions;
 	);
 	libeth_cacheline_group(cold,
 		u32 q_id;
@@ -788,7 +788,7 @@ struct idpf_compl_queue {
 		struct idpf_q_vector *q_vector;
 	);
 };
-libeth_cacheline_set_assert(struct idpf_compl_queue, 40, 12, 24);
+libeth_cacheline_set_assert(struct idpf_compl_queue, 40, 16, 24);
 
 /**
  * struct idpf_sw_queue
@@ -907,7 +907,7 @@ struct idpf_txq_group {
 
 	struct idpf_compl_queue *complq;
 
-	u32 num_completions_pending;
+	aligned_u64 num_completions_pending;
 };
 
 static inline int idpf_q_vector_to_mem(const struct idpf_q_vector *q_vector)
