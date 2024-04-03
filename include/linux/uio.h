@@ -9,6 +9,7 @@
 #include <linux/thread_info.h>
 #include <linux/mm_types.h>
 #include <uapi/linux/uio.h>
+#include <net/netmem.h>
 
 struct page;
 
@@ -27,6 +28,7 @@ enum iter_type {
 	ITER_KVEC,
 	ITER_XARRAY,
 	ITER_DISCARD,
+	ITER_NVEC,
 };
 
 #define ITER_SOURCE	1	// == WRITE
@@ -66,6 +68,7 @@ struct iov_iter {
 				const struct iovec *__iov;
 				const struct kvec *kvec;
 				const struct bio_vec *bvec;
+				const struct nio_vec *nvec;
 				struct xarray *xarray;
 				void __user *ubuf;
 			};
@@ -262,9 +265,15 @@ void iov_iter_kvec(struct iov_iter *i, unsigned int direction, const struct kvec
 			unsigned long nr_segs, size_t count);
 void iov_iter_bvec(struct iov_iter *i, unsigned int direction, const struct bio_vec *bvec,
 			unsigned long nr_segs, size_t count);
+void iov_iter_nvec(struct iov_iter *i, unsigned int direction, const struct nio_vec *nvec,
+			unsigned long nr_segs, size_t count);
 void iov_iter_discard(struct iov_iter *i, unsigned int direction, size_t count);
 void iov_iter_xarray(struct iov_iter *i, unsigned int direction, struct xarray *xarray,
 		     loff_t start, size_t count);
+ssize_t iov_iter_get_netmems2(struct iov_iter *i, netmem_ref *netmems,
+			size_t maxsize, unsigned maxnetmems, size_t *start);
+ssize_t iov_iter_get_netmems_alloc2(struct iov_iter *i, netmem_ref **netmems,
+			size_t maxsize, size_t *start);
 ssize_t iov_iter_get_pages2(struct iov_iter *i, struct page **pages,
 			size_t maxsize, unsigned maxpages, size_t *start);
 ssize_t iov_iter_get_pages_alloc2(struct iov_iter *i, struct page ***pages,

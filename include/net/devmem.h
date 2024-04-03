@@ -10,6 +10,10 @@
 #ifndef _NET_DEVMEM_H
 #define _NET_DEVMEM_H
 
+#include <linux/xarray.h>
+
+extern struct xarray net_devmem_dmabuf_bindings;
+
 struct net_devmem_dmabuf_binding {
 	struct dma_buf *dmabuf;
 	struct dma_buf_attachment *attachment;
@@ -40,6 +44,10 @@ struct net_devmem_dmabuf_binding {
 	 * active.
 	 */
 	u32 id;
+
+	struct iov_iter *iter;
+	struct nio_vec *tx_nv;
+	size_t num_pages;
 };
 
 /* Owner of the dma-buf chunks inserted into the gen pool. Each scatterlist

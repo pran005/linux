@@ -628,8 +628,8 @@ int __zerocopy_sg_from_iter(struct msghdr *msg, struct sock *sk,
 	frag = skb_shinfo(skb)->nr_frags;
 
 	while (length && iov_iter_count(from)) {
-		struct page *head, *last_head = NULL;
-		struct page *pages[MAX_SKB_FRAGS];
+		netmem_ref head, last_head = 0;
+		netmem_ref netmems[MAX_SKB_FRAGS];
 		int refs, order, n = 0;
 		size_t start;
 		ssize_t copied;
@@ -638,7 +638,7 @@ int __zerocopy_sg_from_iter(struct msghdr *msg, struct sock *sk,
 		if (frag == MAX_SKB_FRAGS)
 			return -EMSGSIZE;
 
-		copied = iov_iter_get_pages2(from, pages, length,
+		copied = iov_iter_get_netmems2(from, netmems, length,
 					    MAX_SKB_FRAGS - frag, &start);
 		if (copied < 0)
 			return -EFAULT;
@@ -657,24 +657,24 @@ int __zerocopy_sg_from_iter(struct msghdr *msg, struct sock *sk,
 			refcount_add(truesize, &skb->sk->sk_wmem_alloc);
 		}
 
-		head = compound_head(pages[n]);
-		order = compound_order(head);
+		head = netmem_head(netmems[n]);
+		order = netmem_order(head);
 
 		for (refs = 0; copied != 0; start = 0) {
 			int size = min_t(int, copied, PAGE_SIZE - start);
 
-			if (pages[n] - head > (1UL << order) - 1) {
-				head = compound_head(pages[n]);
-				order = compound_order(head);
+			if (netmems[n] - head > (1UL << order) - 1) {
+				head = netmem_head(netmems[n]);
+				order = netmem_order(head);
 			}
 
-			start += (pages[n] - head) << PAGE_SHIFT;
+			start += (netmems[n] - head) << PAGE_SHIFT;
 			copied -= size;
 			n++;
 			if (frag) {
 				skb_frag_t *last = &skb_shinfo(skb)->frags[frag - 1];
 
-				if (head == skb_frag_page(last) &&
+				if (head == skb_frag_netmem(last) &&
 				    start == skb_frag_off(last) + skb_frag_size(last)) {
 					skb_frag_size_add(last, size);
 					/* We combined this page, we need to release
@@ -688,13 +688,13 @@ int __zerocopy_sg_from_iter(struct msghdr *msg, struct sock *sk,
 				}
 			}
 			if (refs) {
-				page_ref_sub(last_head, refs);
+				netmem_ref_sub(last_head, refs);
 				refs = 0;
 			}
-			skb_fill_page_desc_noacc(skb, frag++, head, start, size);
+			skb_fill_netmem_desc_noacc(skb, frag++, head, start, size);
 		}
 		if (refs)
-			page_ref_sub(last_head, refs);
+			netmem_ref_sub(last_head, refs);
 	}
 	return 0;
 }

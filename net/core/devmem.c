@@ -143,7 +143,7 @@ void net_devmem_free_dmabuf(struct net_iov *niov)
 }
 
 /* Protected by rtnl_lock() */
-static DEFINE_XARRAY_FLAGS(net_devmem_dmabuf_bindings, XA_FLAGS_ALLOC1);
+DEFINE_XARRAY_FLAGS(net_devmem_dmabuf_bindings, XA_FLAGS_ALLOC1);
 
 void net_devmem_unbind_dmabuf(struct net_devmem_dmabuf_binding *binding)
 {
@@ -281,7 +281,15 @@ int net_devmem_bind_dmabuf(struct net_device *dev, unsigned int dmabuf_fd,
 		goto err_unmap;
 	}
 
+	binding->num_pages = binding->dmabuf->size / PAGE_SIZE;
+
+	binding->tx_nv = kvmalloc_array(binding->num_pages,
+			sizeof(struct nio_vec), GFP_KERNEL);
+	if (!binding->tx_nv)
+		return -ENOMEM;
+
 	virtual = 0;
+	int j = 0;
 	for_each_sgtable_dma_sg(binding->sgt, sg, sg_idx) {
 		dma_addr_t dma_addr = sg_dma_address(sg);
 		struct dmabuf_genpool_chunk_owner *owner;
@@ -314,10 +322,23 @@ int net_devmem_bind_dmabuf(struct net_device *dev, unsigned int dmabuf_fd,
 		for (i = 0; i < owner->num_niovs; i++) {
 			niov = &owner->niovs[i];
 			niov->owner = owner;
+
+			BUG_ON(j >= binding->num_pages);
+			binding->tx_nv[j].netmem = net_iov_to_netmem(niov);
+			binding->tx_nv[j].offset = 0;
+
+			// TODO this is not always PAGE_SIZE.
+			binding->tx_nv[j].len = PAGE_SIZE;
+			j++;
 		}
 
 		virtual += len;
 	}
+
+	/* TODO, need to free this */
+	binding->iter = kvzalloc(sizeof(*binding->iter), GFP_KERNEL);
+	iov_iter_nvec(binding->iter, WRITE, binding->tx_nv,
+			binding->num_pages, binding->dmabuf->size);
 
 	*out = binding;
 

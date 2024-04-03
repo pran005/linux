@@ -10,6 +10,7 @@
 
 #include <net/devmem.h>
 #include <net/net_debug.h>
+#include <linux/mm.h>
 
 /* net_iov */
 
@@ -27,6 +28,7 @@ struct net_iov {
 	struct dmabuf_genpool_chunk_owner *owner;
 	unsigned long dma_addr;
 	atomic_long_t pp_ref_count;
+	atomic_t refcount; /* non-pp ref count */
 };
 
 /* These fields in struct page are used by the page_pool and net stack:
@@ -161,13 +163,26 @@ static inline netmem_ref page_to_netmem(struct page *page)
 
 static inline int netmem_ref_count(netmem_ref netmem)
 {
-	/* The non-pp refcount of net_iov is always 1. On net_iov, we only
-	 * support pp refcounting which uses the pp_ref_count field.
-	 */
 	if (netmem_is_net_iov(netmem))
-		return 1;
+		atomic_read(&netmem_to_net_iov(netmem)->refcount);
 
 	return page_ref_count(netmem_to_page(netmem));
+}
+
+static inline void netmem_ref_sub(netmem_ref netmem, int nr)
+{
+	if (netmem_is_net_iov(netmem))
+		atomic_sub(nr, &netmem_to_net_iov(netmem)->refcount);
+
+	page_ref_sub(netmem_to_page(netmem), nr);
+}
+
+static inline void get_netmem(netmem_ref netmem)
+{
+	if (netmem_is_net_iov(netmem))
+		atomic_inc(&netmem_to_net_iov(netmem)->refcount);
+
+	get_page(netmem_to_page(netmem));
 }
 
 static inline unsigned long netmem_to_pfn(netmem_ref netmem)
@@ -259,5 +274,29 @@ static inline void *netmem_address(netmem_ref netmem)
 
 	return page_address(netmem_to_page(netmem));
 }
+
+static inline netmem_ref netmem_head(netmem_ref netmem)
+{
+	/* niovs aren't compounded. */
+	if (netmem_is_net_iov(netmem))
+		return netmem;
+
+	return page_to_netmem(compound_head(netmem_to_page(netmem)));
+}
+
+static inline int netmem_order(netmem_ref netmem)
+{
+	/* niovs aren't compounded. */
+	if (netmem_is_net_iov(netmem))
+		return 0;
+
+	return compound_order(netmem_to_page(netmem));
+}
+
+struct nio_vec {
+	netmem_ref netmem;
+	unsigned int len;
+	unsigned int offset;
+};
 
 #endif /* _NET_NETMEM_H */

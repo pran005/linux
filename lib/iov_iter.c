@@ -12,6 +12,7 @@
 #include <linux/scatterlist.h>
 #include <linux/instrumented.h>
 #include <linux/iov_iter.h>
+#include <net/netmem.h>
 
 static __always_inline
 size_t copy_to_user_iter(void __user *iter_to, size_t progress,
@@ -639,6 +640,21 @@ void iov_iter_bvec(struct iov_iter *i, unsigned int direction,
 }
 EXPORT_SYMBOL(iov_iter_bvec);
 
+void iov_iter_nvec(struct iov_iter *i, unsigned int direction,
+			const struct nio_vec *nvec, unsigned long nr_segs,
+			size_t count)
+{
+	WARN_ON(direction & ~(READ | WRITE));
+	*i = (struct iov_iter){
+		.iter_type = ITER_NVEC,
+		.data_source = direction,
+		.nvec = nvec,
+		.nr_segs = nr_segs,
+		.iov_offset = 0,
+		.count = count
+	};
+}
+EXPORT_SYMBOL(iov_iter_nvec);
 /**
  * iov_iter_xarray - Initialise an I/O iterator to use the pages in an xarray
  * @i: The iterator to initialise.
@@ -887,6 +903,22 @@ static int want_pages_array(struct page ***res, size_t size,
 	return count;
 }
 
+static int want_netmems_array(netmem_ref **res, size_t size,
+			    size_t start, unsigned int maxnetmems)
+{
+	unsigned int count = DIV_ROUND_UP(size + start, PAGE_SIZE);
+
+	if (count > maxnetmems)
+		count = maxnetmems;
+	WARN_ON(!count);	// caller should've prevented that
+	if (!*res) {
+		*res = kvmalloc_array(count, sizeof(netmem_ref), GFP_KERNEL);
+		if (!*res)
+			return 0;
+	}
+	return count;
+}
+
 static ssize_t iter_xarray_populate_pages(struct page **pages, struct xarray *xa,
 					  pgoff_t index, unsigned int nr_pages)
 {
@@ -978,6 +1010,21 @@ static struct page *first_bvec_segment(const struct iov_iter *i,
 	return page;
 }
 
+static netmem_ref first_nvec_segment(const struct iov_iter *i,
+				     size_t *size, size_t *start)
+{
+	netmem_ref netmem;
+	size_t skip = i->iov_offset, len;
+
+	len = i->nvec->len - skip;
+	if (*size > len)
+		*size = len;
+	skip += i->nvec->offset;
+	netmem = i->nvec->netmem + skip / PAGE_SIZE;
+	*start = skip % PAGE_SIZE;
+	return netmem;
+}
+
 static ssize_t __iov_iter_get_pages_alloc(struct iov_iter *i,
 		   struct page ***pages, size_t maxsize,
 		   unsigned int maxpages, size_t *start)
@@ -1038,6 +1085,56 @@ static ssize_t __iov_iter_get_pages_alloc(struct iov_iter *i,
 		return iter_xarray_get_pages(i, pages, maxsize, maxpages, start);
 	return -EFAULT;
 }
+
+static ssize_t __iov_iter_get_netmems_alloc(struct iov_iter *i,
+		   netmem_ref **netmems, size_t maxsize,
+		   unsigned int maxnetmems, size_t *start)
+{
+	unsigned int n;
+
+	if (maxsize > i->count)
+		maxsize = i->count;
+
+	if (!maxsize)
+		return 0;
+
+	if (maxsize > MAX_RW_COUNT)
+		maxsize = MAX_RW_COUNT;
+
+	if (iov_iter_is_bvec(i)) {
+		netmem_ref *p;
+		netmem_ref netmem;
+
+		netmem = first_nvec_segment(i, &maxsize, start);
+		n = want_netmems_array(netmems, maxsize, *start, maxnetmems);
+		if (!n)
+			return -ENOMEM;
+		p = *netmems;
+		for (int k = 0; k < n; k++)
+			get_netmem(p[k] = netmem + k);
+		maxsize = min_t(size_t, maxsize, n * PAGE_SIZE - *start);
+		i->count -= maxsize;
+		i->iov_offset += maxsize;
+		if (i->iov_offset == i->bvec->bv_len) {
+			i->iov_offset = 0;
+			i->bvec++;
+			i->nr_segs--;
+		}
+		return maxsize;
+	}
+	return -EFAULT;
+}
+
+ssize_t iov_iter_get_netmems2(struct iov_iter *i, netmem_ref *netmems,
+		size_t maxsize, unsigned maxnetmems, size_t *start)
+{
+	if (!maxnetmems)
+		return 0;
+	BUG_ON(!netmems);
+
+	return __iov_iter_get_netmems_alloc(i, &netmems, maxsize, maxnetmems, start);
+}
+EXPORT_SYMBOL(iov_iter_get_netmems2);
 
 ssize_t iov_iter_get_pages2(struct iov_iter *i, struct page **pages,
 		size_t maxsize, unsigned maxpages, size_t *start)

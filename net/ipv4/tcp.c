@@ -280,6 +280,7 @@
 #include <asm/ioctls.h>
 #include <net/busy_poll.h>
 #include <net/rps.h>
+#include <linux/dma-buf.h>
 
 /* Track pending CMSGs. */
 enum {
@@ -1037,48 +1038,36 @@ int tcp_sendmsg_fastopen(struct sock *sk, struct msghdr *msg, int *copied,
 	return err;
 }
 
-static int tcp_prepare_devmem_data(struct msghdr *msg, int devmem_fd,
-				   unsigned int devmem_offset,
-				   struct file **devmem_file,
+static int tcp_prepare_devmem_data(struct msghdr *msg, int dmabuf_id,
+				   unsigned int dmabuf_offset,
+				   struct net_devmem_dmabuf_binding **binding,
 				   struct iov_iter *devmem_tx_iter, size_t size)
 {
-	struct dma_buf_pages *priv;
 	int err = 0;
 
-	*devmem_file = fget_raw(devmem_fd);
-	if (!*devmem_file) {
+	// TODO, this is not safe, because we could unbind in parallel (we
+	// don't hold rtnl_lock().
+	*binding = xa_load(&net_devmem_dmabuf_bindings, dmabuf_id);
+	if (!*binding) {
 		err = -EINVAL;
 		goto err;
 	}
 
-	if (!is_dma_buf_pages_file(*devmem_file)) {
-		err = -EBADF;
-		goto err_fput;
-	}
+	net_devmem_dmabuf_binding_get(*binding);
 
-	priv = (*devmem_file)->private_data;
-	if (!priv) {
-		WARN_ONCE(!priv, "dma_buf_pages_file has no private_data");
-		err = -EINTR;
-		goto err_fput;
-	}
-
-	if (!(priv->type & DMA_BUF_PAGES_NET_TX))
-		return -EINVAL;
-
-	if (devmem_offset + size > priv->dmabuf->size) {
+	if (dmabuf_offset + size > (*binding)->dmabuf->size) {
 		err = -ENOSPC;
 		goto err_fput;
 	}
 
-	*devmem_tx_iter = priv->net_tx.iter;
-	iov_iter_advance(devmem_tx_iter, devmem_offset);
+	devmem_tx_iter = (*binding)->iter;
+	iov_iter_advance(devmem_tx_iter, dmabuf_offset);
 
 	return 0;
 
 err_fput:
-	fput(*devmem_file);
-	*devmem_file = NULL;
+	net_devmem_dmabuf_binding_put(*binding);
+	*binding = NULL;
 err:
 	return err;
 }
@@ -1094,7 +1083,7 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 	int process_backlog = 0;
 	int zc = 0;
 	long timeo;
-	struct file *devmem_file = NULL;
+	struct net_devmem_dmabuf_binding *binding = NULL;
 	struct iov_iter devmem_tx_iter;
 
 	flags = msg->msg_flags;
@@ -1168,9 +1157,9 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 		}
 	}
 
-	if (sockc.devmem_fd) {
-		err = tcp_prepare_devmem_data(msg, sockc.devmem_fd,
-					      sockc.devmem_offset, &devmem_file,
+	if (sockc.dmabuf_id) {
+		err = tcp_prepare_devmem_data(msg, sockc.dmabuf_id,
+					      sockc.dmabuf_offset, &binding,
 					      &devmem_tx_iter, size);
 		if (err)
 			goto out_err;
@@ -1289,7 +1278,7 @@ new_segment:
 					goto wait_for_space;
 			}
 
-			if (devmem_file) {
+			if (binding) {
 				err = skb_zerocopy_iter_stream(sk, skb, msg,
 							       &devmem_tx_iter,
 							       copy, uarg);
@@ -1381,8 +1370,8 @@ out_nopush:
 	if (uarg && !msg->msg_ubuf)
 		net_zcopy_put(uarg);
 	net_zcopy_put(uarg);
-	if (devmem_file)
-		fput(devmem_file);
+	if (binding)
+		net_devmem_dmabuf_binding_put(binding);
 	return copied + copied_syn;
 
 do_error:
@@ -1394,8 +1383,8 @@ out_err:
 	/* msg->msg_ubuf is pinned by the caller so we don't take extra refs */
 	if (uarg && !msg->msg_ubuf)
 		net_zcopy_put_abort(uarg, true);
-	if (devmem_file)
-		fput(devmem_file);
+	if (binding)
+		net_devmem_dmabuf_binding_put(binding);
 	net_zcopy_put_abort(uarg, true);
 	err = sk_stream_error(sk, flags, err);
 	/* make sure we wake any epoll edge trigger waiter */

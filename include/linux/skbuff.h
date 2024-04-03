@@ -2567,6 +2567,16 @@ static inline void skb_fill_page_desc(struct sk_buff *skb, int i,
 	skb_fill_netmem_desc(skb, i, page_to_netmem(page), off, size);
 }
 
+static inline void skb_fill_netmem_desc_noacc(struct sk_buff *skb, int i,
+					    netmem_ref netmem, int off,
+					    int size)
+{
+	struct skb_shared_info *shinfo = skb_shinfo(skb);
+
+	__skb_fill_netmem_desc_noacc(shinfo, i, netmem, off, size);
+	shinfo->nr_frags = i + 1;
+}
+
 /**
  * skb_fill_page_desc_noacc - initialise a paged fragment in an skb
  * @skb: buffer containing fragment to be initialised
@@ -2582,10 +2592,7 @@ static inline void skb_fill_page_desc_noacc(struct sk_buff *skb, int i,
 					    struct page *page, int off,
 					    int size)
 {
-	struct skb_shared_info *shinfo = skb_shinfo(skb);
-
-	__skb_fill_page_desc_noacc(shinfo, i, page, off, size);
-	shinfo->nr_frags = i + 1;
+	skb_fill_netmem_desc_noacc(skb, i, page_to_netmem(page), off, size);
 }
 
 void skb_add_rx_frag_netmem(struct sk_buff *skb, int i, netmem_ref netmem,
@@ -3681,9 +3688,8 @@ static inline dma_addr_t skb_devmem_frag_dma_map(struct device *dev,
 						 size_t offset, size_t size,
 						 enum dma_data_direction dir)
 {
-	if (unlikely(skb->devmem && is_dma_buf_page(skb_frag_page(frag)))) {
-		dma_addr_t dma_addr =
-			dma_buf_page_to_dma_addr(skb_frag_page(frag));
+	if (!skb_frags_readable(skb) && netmem_is_net_iov(frag->netmem)) {
+		dma_addr_t dma_addr = skb_frag_net_iov(frag)->dma_addr;
 		return dma_addr + skb_frag_off(frag) + offset;
 	}
 	return skb_frag_dma_map(dev, frag, offset, size, dir);
