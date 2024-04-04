@@ -11316,7 +11316,7 @@ int __dev_change_net_namespace(struct net_device *dev, struct net *net,
 
 	/* Don't allow namespace local devices to be moved. */
 	err = -EINVAL;
-	if (dev->features & NETIF_F_NETNS_LOCAL)
+	if (dev->priv_flags & IFF_NETNS_LOCAL)
 		goto out;
 
 	/* Ensure the device has been registrered */
@@ -11698,7 +11698,7 @@ static void __net_exit default_device_exit_net(struct net *net)
 		char fb_name[IFNAMSIZ];
 
 		/* Ignore unmoveable devices (i.e. loopback) */
-		if (dev->features & NETIF_F_NETNS_LOCAL)
+		if (dev->priv_flags & IFF_NETNS_LOCAL)
 			continue;
 
 		/* Leave virtual devices for the generic cleanup */
