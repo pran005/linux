@@ -48,15 +48,23 @@
  *
  * Usage:
  *
+ * * Without validation:
+ *
  *	On server:
- *	ncdevmem -s <server IP> -c <client IP> -f eth1 -d 3 -n 0000:06:00.0 -l \
- *		-p 5201 -v 7
+ *	ncdevmem -s <server IP> -c <client IP> -f eth1 -n 0000:06:00.0 -l \
+ *		-p 5201
  *
  *	On client:
- *	yes $(echo -e \\x01\\x02\\x03\\x04\\x05\\x06) | \
- *		tr \\n \\0 | \
- *		head -c 5G | \
- *		nc <server IP> 5201 -p 5201
+ *	ncdevmem -s <server IP> -c <client IP> -f eth1 -n 0000:06:00.0 -p 5201
+ *
+ * * With Validation:
+ *	On server:
+ *	ncdevmem -s <server IP> -c <client IP> -l -f eth1 -n 0000:06:00.0 \
+ *		-p 5202 -v 1
+ *
+ *	On client:
+ *	ncdevmem -s <server IP> -c <client IP> -f eth1 -n 0000:06:00.0 -p 5202 \
+ *		-v 100000
  *
  * Note this is compatible with regular netcat. i.e. the sender or receiver can
  * be replaced with regular netcat to test the RX or TX path in isolation.
@@ -70,7 +78,6 @@ static int start_queue = 8;
 static int num_queues = 8;
 static char *ifname = "eth1";
 static unsigned int ifindex = 3;
-static char *nic_pci_addr = "0000:06:00.0";
 static unsigned int iterations;
 static unsigned int dmabuf_id;
 static int bind_only = 0;
@@ -117,6 +124,18 @@ void validate_buffer(void *line, size_t size)
 	}
 
 	fprintf(stdout, "Validated buffer\n");
+}
+
+static void initialize_validation(void *line, size_t size)
+{
+	static unsigned char seed = 1;
+	unsigned char *ptr = line;
+	for (size_t i = 0; i < size; i++) {
+		ptr[i] = seed;
+		seed++;
+		if (seed == 254)
+			seed = 0;
+	}
 }
 
 static void reset_flow_steering(void)
@@ -199,6 +218,50 @@ err_close:
 	ynl_sock_destroy(*ys);
 	return -1;
 }
+
+static int bind_tx_queue(unsigned int ifindex, unsigned int dmabuf_fd,
+			 struct ynl_sock **ys)
+{
+	struct netdev_bind_tx_req *req = NULL;
+	struct netdev_bind_tx_rsp *rsp = NULL;
+	struct ynl_error yerr;
+
+	*ys = ynl_sock_create(&ynl_netdev_family, &yerr);
+	if (!*ys) {
+		fprintf(stderr, "YNL: %s\n", yerr.msg);
+		return -1;
+	}
+
+	req = netdev_bind_tx_req_alloc();
+	netdev_bind_tx_req_set_ifindex(req, ifindex);
+	netdev_bind_tx_req_set_dmabuf_fd(req, dmabuf_fd);
+
+	rsp = netdev_bind_tx(*ys, req);
+	if (!rsp) {
+		perror("netdev_bind_tx");
+		goto err_close;
+	}
+
+	if (!rsp->_present.dmabuf_id) {
+		perror("dmabuf_id not present");
+		goto err_close;
+	}
+
+	printf("got dmabuf id=%d\n", rsp->dmabuf_id);
+	dmabuf_id = rsp->dmabuf_id;
+
+	netdev_bind_tx_req_free(req);
+	netdev_bind_tx_rsp_free(rsp);
+
+	return 0;
+
+err_close:
+	fprintf(stderr, "YNL failed: %s\n", (*ys)->err.msg);
+	netdev_bind_tx_req_free(req);
+	ynl_sock_destroy(*ys);
+	return -1;
+}
+
 
 static void create_udmabuf(int *devfd, int *memfd, int *buf, size_t dmabuf_size)
 {
@@ -493,6 +556,171 @@ void run_devmem_tests(void)
 	ynl_sock_destroy(ys);
 }
 
+int do_client()
+{
+	printf("doing client\n");
+
+	int devfd, memfd, buf, ret;
+	struct ynl_sock *ys;
+	size_t dmabuf_size;
+
+	dmabuf_size = getpagesize() * NUM_PAGES;
+
+	create_udmabuf(&devfd, &memfd, &buf, dmabuf_size);
+
+	if (bind_tx_queue(ifindex, buf, &ys))
+		error(1, 0, "Failed to bind\n");
+
+	char *buf_mem = NULL;
+	buf_mem = mmap(NULL, dmabuf_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+		       buf, 0);
+	if (buf_mem == MAP_FAILED) {
+		perror("mmap()");
+		exit(1);
+	}
+
+	struct sockaddr_in server_sin;
+	server_sin.sin_family = AF_INET;
+	server_sin.sin_port = htons(atoi(port));
+
+	ret = inet_pton(server_sin.sin_family, server_ip, &server_sin.sin_addr);
+	if (socket < 0) {
+		printf("%s: [FAIL, create socket]\n", TEST_PREFIX);
+		exit(79);
+	}
+
+	int socket_fd = socket(server_sin.sin_family, SOCK_STREAM, 0);
+	if (socket < 0) {
+		printf("%s: [FAIL, create socket]\n", TEST_PREFIX);
+		exit(76);
+	}
+
+	int opt = 1;
+	ret = setsockopt(socket_fd, SOL_SOCKET,
+			 SO_REUSEADDR | SO_REUSEPORT | SO_ZEROCOPY, &opt,
+			 sizeof(opt));
+	if (ret) {
+		printf("%s: [FAIL, set sock opt]: %s\n", TEST_PREFIX,
+		       strerror(errno));
+		exit(76);
+	}
+
+	struct sockaddr_in client_sin;
+	client_sin.sin_family = AF_INET;
+	client_sin.sin_port = htons(atoi(port));
+
+	ret = inet_pton(client_sin.sin_family, client_ip, &client_sin.sin_addr);
+	if (socket < 0) {
+		printf("%s: [FAIL, create socket]\n", TEST_PREFIX);
+		exit(79);
+	}
+
+	ret = bind(socket_fd, &client_sin, sizeof(client_sin));
+	if (ret) {
+		printf("%s: [FAIL, bind]: %s\n", TEST_PREFIX, strerror(errno));
+		exit(76);
+	}
+
+	ret = setsockopt(socket_fd, SOL_SOCKET, SO_ZEROCOPY, &opt, sizeof(opt));
+	if (ret) {
+		printf("%s: [FAIL, set sock opt]: %s\n", TEST_PREFIX,
+		       strerror(errno));
+		exit(76);
+	}
+
+	ret = connect(socket_fd, &server_sin, sizeof(server_sin));
+	if (ret) {
+		printf("%s: [FAIL, connect]: %s\n", TEST_PREFIX,
+		       strerror(errno));
+		exit(76);
+	}
+
+	char *line = NULL;
+	size_t line_size = 0;
+	size_t len = 0;
+
+	size_t i = 0;
+	while (!iterations || i < iterations) {
+		i++;
+		free(line);
+		line = NULL;
+		if (do_validation) {
+			line = malloc(do_validation);
+			if (!line) {
+				fprintf(stderr, "Failed to allocate\n");
+				exit(1);
+			}
+			memset(line, 0, do_validation);
+			initialize_validation(line, do_validation);
+			line_size = do_validation;
+		} else {
+			line_size = getline(&line, &len, stdin);
+		}
+
+		if (line_size < 0)
+			continue;
+
+		fprintf(stdout, "DEBUG: read line_size=%lu\n", line_size);
+
+		struct dma_buf_sync sync = { 0 };
+		sync.flags = DMA_BUF_SYNC_WRITE | DMA_BUF_SYNC_START;
+		ioctl(buf, DMA_BUF_IOCTL_SYNC, &sync);
+
+		memset(buf_mem, 0, dmabuf_size);
+		memcpy(buf_mem, line, line_size);
+
+		if (do_validation)
+			validate_buffer(buf_mem, line_size);
+
+		struct iovec iov = { .iov_base = NULL, .iov_len = line_size };
+
+		struct msghdr msg = { 0 };
+
+		msg.msg_iov = &iov;
+		msg.msg_iovlen = 1;
+
+		char ctrl_data[CMSG_SPACE(sizeof(int) * 2)];
+		msg.msg_control = ctrl_data;
+		msg.msg_controllen = sizeof(ctrl_data);
+
+		struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+		cmsg->cmsg_level = SOL_SOCKET;
+		cmsg->cmsg_type = SO_DEVMEM_DMABUF_BIND;
+		cmsg->cmsg_len = CMSG_LEN(sizeof(int) * 2);
+		*((int *)CMSG_DATA(cmsg)) = buf;
+		((int *)CMSG_DATA(cmsg))[1] = 0;
+
+		ret = sendmsg(socket_fd, &msg, MSG_ZEROCOPY);
+		if (ret < 0)
+			perror("sendmsg");
+		else
+			fprintf(stdout, "DEBUG: sendmsg_ret=%d\n", ret);
+
+		sync.flags = DMA_BUF_SYNC_WRITE | DMA_BUF_SYNC_END;
+		ioctl(buf, DMA_BUF_IOCTL_SYNC, &sync);
+
+		// sleep for a bit before we overwrite the dmabuf that's being
+		// sent.
+		if (do_validation)
+			sleep(1);
+	}
+
+	fprintf(stdout, "%s: ok\n", TEST_PREFIX);
+
+	while (1)
+		sleep(10);
+
+	munmap(buf_mem, dmabuf_size);
+
+	free(line);
+	close(socket_fd);
+	close(buf);
+	close(memfd);
+	close(devfd);
+
+	return 0;
+}
+
 int main(int argc, char *argv[])
 {
 	int is_server = 0, opt;
@@ -526,9 +754,6 @@ int main(int argc, char *argv[])
 		case 'd':
 			ifindex = atoi(optarg);
 			break;
-		case 'n':
-			nic_pci_addr = optarg;
-			break;
 		case 'i':
 			iterations = atoll(optarg);
 			break;
@@ -544,10 +769,11 @@ int main(int argc, char *argv[])
 	for (; optind < argc; optind++)
 		printf("extra arguments: %s\n", argv[optind]);
 
-	run_devmem_tests();
 
-	if (is_server)
+	if (is_server) {
+		run_devmem_tests();
 		return do_server();
+	}
 
-	return 0;
+	return do_client();
 }
