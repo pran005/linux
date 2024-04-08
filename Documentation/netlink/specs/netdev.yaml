@@ -511,6 +511,18 @@ operations:
           attributes:
             - dmabuf-id
     -
+      name: bind-tx
+      doc: Bind dmabuf to netdev for tx
+      attribute-set: bind-dmabuf
+      do:
+        request:
+          attributes:
+            - ifindex
+            - dmabuf-fd
+        reply:
+          attributes:
+            - dmabuf-id
+    -
       name: napi-get
       doc: Get information about NAPI instances configured on the system.
       attribute-set: napi
