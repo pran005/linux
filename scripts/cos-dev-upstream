@@ -38,6 +38,8 @@ sed -i "s/CLIENT/$CLIENT/g" scripts/queue-api-server
 
 staging_gcloud compute scp scripts/server $instance1:~/
 staging_gcloud compute scp scripts/client $instance2:~/
+staging_gcloud compute scp scripts/tx-server $instance1:~/
+staging_gcloud compute scp scripts/tx-client $instance2:~/
 staging_gcloud compute scp scripts/queue-api-server $instance1:~/
 staging_gcloud compute scp scripts/queue-api-client $instance2:~/
 
