@@ -679,15 +679,15 @@ int do_client()
 		msg.msg_iov = &iov;
 		msg.msg_iovlen = 1;
 
-		char ctrl_data[CMSG_SPACE(sizeof(int) * 2)];
+		char ctrl_data[CMSG_SPACE(sizeof(int) * 3)];
 		msg.msg_control = ctrl_data;
 		msg.msg_controllen = sizeof(ctrl_data);
 
 		struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
 		cmsg->cmsg_level = SOL_SOCKET;
 		cmsg->cmsg_type = SO_DEVMEM_DMABUF_BIND;
-		cmsg->cmsg_len = CMSG_LEN(sizeof(int) * 2);
-		*((int *)CMSG_DATA(cmsg)) = buf;
+		cmsg->cmsg_len = CMSG_LEN(sizeof(int) * 3);
+		*((int *)CMSG_DATA(cmsg)) = dmabuf_id;
 		((int *)CMSG_DATA(cmsg))[1] = 0;
 
 		ret = sendmsg(socket_fd, &msg, MSG_ZEROCOPY);

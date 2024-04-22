@@ -687,6 +687,8 @@ int netdev_nl_bind_rx_doit(struct sk_buff *skb, struct genl_info *info)
 	int rem, err = 0;
 	void *hdr;
 
+	mina_debug(0, 1, "executing here");
+
 	if (GENL_REQ_ATTR_CHECK(info, NETDEV_A_DEV_IFINDEX) ||
 	    GENL_REQ_ATTR_CHECK(info, NETDEV_A_BIND_DMABUF_DMABUF_FD) ||
 	    GENL_REQ_ATTR_CHECK(info, NETDEV_A_BIND_DMABUF_QUEUES))
@@ -786,9 +788,13 @@ int netdev_nl_bind_tx_doit(struct sk_buff *skb, struct genl_info *info)
 	int err = 0;
 	void *hdr;
 
+	mina_debug(0, 1, "executing here");
+
 	if (GENL_REQ_ATTR_CHECK(info, NETDEV_A_DEV_IFINDEX) ||
-	    GENL_REQ_ATTR_CHECK(info, NETDEV_A_BIND_DMABUF_DMABUF_FD))
+	    GENL_REQ_ATTR_CHECK(info, NETDEV_A_BIND_DMABUF_DMABUF_FD)) {
+		mina_debug(0, 1, "failed here");
 		return -EINVAL;
+	}
 
 	ifindex = nla_get_u32(info->attrs[NETDEV_A_DEV_IFINDEX]);
 	dmabuf_fd = nla_get_u32(info->attrs[NETDEV_A_BIND_DMABUF_DMABUF_FD]);
@@ -797,6 +803,7 @@ int netdev_nl_bind_tx_doit(struct sk_buff *skb, struct genl_info *info)
 
 	netdev = __dev_get_by_index(genl_info_net(info), ifindex);
 	if (!netdev) {
+		mina_debug(0, 1, "failed here");
 		err = -ENODEV;
 		goto err_unlock;
 	}
@@ -817,6 +824,7 @@ int netdev_nl_bind_tx_doit(struct sk_buff *skb, struct genl_info *info)
 	rsp = genlmsg_new(GENLMSG_DEFAULT_SIZE, GFP_KERNEL);
 	if (!rsp) {
 		err = -ENOMEM;
+		mina_debug(0, 1, "failed here");
 		goto err_unbind;
 	}
 
@@ -830,6 +838,8 @@ int netdev_nl_bind_tx_doit(struct sk_buff *skb, struct genl_info *info)
 	genlmsg_end(rsp, hdr);
 
 	rtnl_unlock();
+
+	mina_debug(0, 1, "executing here");
 
 	return genlmsg_reply(rsp, info);
 

@@ -125,6 +125,7 @@ net_devmem_alloc_dmabuf(struct net_devmem_dmabuf_binding *binding)
 	niov->pp = NULL;
 	niov->dma_addr = 0;
 	atomic_long_set(&niov->pp_ref_count, 0);
+	atomic_set(&niov->refcount, 1);
 
 	net_devmem_dmabuf_binding_get(binding);
 
@@ -176,6 +177,9 @@ void net_devmem_unbind_dmabuf(struct net_devmem_dmabuf_binding *binding)
 	}
 
 	xa_erase(&net_devmem_dmabuf_bindings, binding->id);
+
+	mina_debug(0, 1, "removed this id into dmabuf_bindings=%lld",
+			binding->id);
 
 	net_devmem_dmabuf_binding_put(binding);
 }
@@ -250,6 +254,9 @@ int net_devmem_bind_dmabuf(struct net_device *dev, unsigned int dmabuf_fd,
 			      GFP_KERNEL);
 	if (err < 0)
 		goto err_free_binding;
+
+	mina_debug(0, 1, "inserted this id into dmabuf_bindings=%lld",
+			binding->id);
 
 	xa_init_flags(&binding->bound_rxq_list, XA_FLAGS_ALLOC);
 
@@ -355,6 +362,8 @@ err_detach:
 	dma_buf_detach(dmabuf, binding->attachment);
 err_free_id:
 	xa_erase(&net_devmem_dmabuf_bindings, binding->id);
+	mina_debug(0, 1, "removed this id into dmabuf_bindings=%lld",
+			binding->id);
 err_free_binding:
 	kfree(binding);
 err_put_dmabuf:

@@ -1049,6 +1049,7 @@ static int tcp_prepare_devmem_data(struct msghdr *msg, int dmabuf_id,
 	// don't hold rtnl_lock().
 	*binding = xa_load(&net_devmem_dmabuf_bindings, dmabuf_id);
 	if (!*binding) {
+		mina_debug(0, 1, "failed here dmabuf_id=%lld", dmabuf_id);
 		err = -EINVAL;
 		goto err;
 	}
@@ -1057,6 +1058,8 @@ static int tcp_prepare_devmem_data(struct msghdr *msg, int dmabuf_id,
 
 	if (dmabuf_offset + size > (*binding)->dmabuf->size) {
 		err = -ENOSPC;
+		mina_debug(0, 1, "failed here dmabuf_offset=%lld, size=%lld, dmabuf->size=%lld",
+				dmabuf_offset, size, (*binding)->dmabuf->size);
 		goto err_fput;
 	}
 
@@ -1098,6 +1101,7 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 			uarg = msg_zerocopy_realloc(sk, size, skb_zcopy(skb));
 			if (!uarg) {
 				err = -ENOBUFS;
+				mina_debug(0, 1, "failed here");
 				goto out_err;
 			}
 			if (sk->sk_route_caps & NETIF_F_SG)
@@ -1116,8 +1120,10 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 		err = tcp_sendmsg_fastopen(sk, msg, &copied_syn, size, uarg);
 		if (err == -EINPROGRESS && copied_syn > 0)
 			goto out;
-		else if (err)
+		else if (err) {
+			mina_debug(0, 1, "failed here");
 			goto out_err;
+		}
 	}
 
 	timeo = sock_sndtimeo(sk, flags & MSG_DONTWAIT);
@@ -1142,8 +1148,10 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 		}
 
 		err = -EINVAL;
-		if (tp->repair_queue == TCP_NO_QUEUE)
+		if (tp->repair_queue == TCP_NO_QUEUE) {
+			mina_debug(0, 1, "failed here");
 			goto out_err;
+		}
 
 		/* 'common' sending to sendq */
 	}
@@ -1153,6 +1161,7 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 		err = sock_cmsg_send(sk, msg, &sockc);
 		if (unlikely(err)) {
 			err = -EINVAL;
+			mina_debug(0, 1, "failed here");
 			goto out_err;
 		}
 	}
@@ -1161,8 +1170,10 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 		err = tcp_prepare_devmem_data(msg, sockc.dmabuf_id,
 					      sockc.dmabuf_offset, &binding,
 					      &devmem_tx_iter, size);
-		if (err)
+		if (err) {
+			mina_debug(0, 1, "failed here");
 			goto out_err;
+		}
 	}
 
 	/* This should be in poll */

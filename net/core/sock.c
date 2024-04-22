@@ -2917,7 +2917,7 @@ int __sock_cmsg_send(struct sock *sk, struct cmsghdr *cmsg,
 			return -EINVAL;
 		sockc->transmit_time = get_unaligned((u64 *)CMSG_DATA(cmsg));
 		break;
-	case SO_DEVMEM_LINEAR:
+	case SO_DEVMEM_DMABUF_BIND:
 		if (cmsg->cmsg_len != CMSG_LEN(3 * sizeof(u32)))
 			return -EINVAL;
 		sockc->dmabuf_id = ((u32 *)CMSG_DATA(cmsg))[0];
@@ -2941,8 +2941,10 @@ int sock_cmsg_send(struct sock *sk, struct msghdr *msg,
 	int ret;
 
 	for_each_cmsghdr(cmsg, msg) {
-		if (!CMSG_OK(msg, cmsg))
+		if (!CMSG_OK(msg, cmsg)) {
+			mina_debug(0, 1, "failed here");
 			return -EINVAL;
+		}
 		if (cmsg->cmsg_level != SOL_SOCKET)
 			continue;
 		ret = __sock_cmsg_send(sk, cmsg, sockc);
