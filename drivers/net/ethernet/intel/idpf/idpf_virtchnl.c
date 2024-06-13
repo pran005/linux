@@ -2127,8 +2127,8 @@ idpf_send_map_unmap_queue_set_vector_msg(const struct idpf_queue_set *qs,
 
 	split = idpf_is_queue_model_split(qs->vport->txq_model);
 
-	for (u32 i = 0; i < qs->num; i++) {
-		const struct idpf_queue_ptr *q = &qs->qs[i];
+	for (u32 i = 0, j = 0; j < qs->num; i++, j++) {
+		const struct idpf_queue_ptr *q = &qs->qs[j];
 		const struct idpf_q_vector *vec;
 		u32 qid, v_idx, itr_idx;
 
@@ -2169,6 +2169,13 @@ idpf_send_map_unmap_queue_set_vector_msg(const struct idpf_queue_set *qs,
 			} else {
 				v_idx = 0;
 				itr_idx = VIRTCHNL2_ITR_IDX_1;
+
+				/* Skip this one. Unroll changes in the loop and
+				 * continue.
+				 */
+				i--;
+				params.num_chunks--;
+				continue;
 			}
 			break;
 		default:
