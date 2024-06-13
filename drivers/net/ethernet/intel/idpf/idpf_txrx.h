@@ -14,7 +14,7 @@
 #include "idpf_lan_txrx.h"
 #include "virtchnl2_lan_desc.h"
 
-#define IDPF_LARGE_MAX_Q			256
+#define IDPF_LARGE_MAX_Q			50
 #define IDPF_MAX_Q				16
 #define IDPF_MIN_Q				2
 /* Mailbox Queue */
