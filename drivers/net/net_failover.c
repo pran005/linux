@@ -379,9 +379,10 @@ static void net_failover_compute_features(struct net_device *dev)
 					  NETIF_F_ALL_FOR_ALL;
 	netdev_features_t enc_features  = FAILOVER_ENC_FEATURES;
 	unsigned short max_hard_header_len = ETH_HLEN;
+	unsigned int dst_release_flag = IFF_XMIT_DST_RELEASE |
+					IFF_XMIT_DST_RELEASE_PERM;
 	struct net_failover_info *nfo_info = netdev_priv(dev);
 	struct net_device *primary_dev, *standby_dev;
-	u64 priv_flags = FAILOVER_PRIV_FLAGS;
 
 	primary_dev = rcu_dereference(nfo_info->primary_dev);
 	if (primary_dev) {
@@ -394,12 +395,7 @@ static void net_failover_compute_features(struct net_device *dev)
 						  primary_dev->hw_enc_features,
 						  FAILOVER_ENC_FEATURES);
 
-		priv_flags &= IFF_ALL_FOR_ALL;
-		priv_flags =
-			netdev_increment_priv_flags(priv_flags,
-						    primary_dev->priv_flags,
-						    FAILOVER_PRIV_FLAGS);
-
+		dst_release_flag &= primary_dev->priv_flags;
 		if (primary_dev->hard_header_len > max_hard_header_len)
 			max_hard_header_len = primary_dev->hard_header_len;
 	}
@@ -415,13 +411,7 @@ static void net_failover_compute_features(struct net_device *dev)
 						  standby_dev->hw_enc_features,
 						  FAILOVER_ENC_FEATURES);
 
-		if (!primary_dev)
-			priv_flags &= IFF_ALL_FOR_ALL;
-		priv_flags =
-			netdev_increment_priv_flags(priv_flags,
-						    standby_dev->priv_flags,
-						    FAILOVER_PRIV_FLAGS);
-
+		dst_release_flag &= standby_dev->priv_flags;
 		if (standby_dev->hard_header_len > max_hard_header_len)
 			max_hard_header_len = standby_dev->hard_header_len;
 	}
@@ -430,7 +420,11 @@ static void net_failover_compute_features(struct net_device *dev)
 	dev->hw_enc_features = enc_features | NETIF_F_GSO_ENCAP_ALL;
 	dev->hard_header_len = max_hard_header_len;
 
-	netdev_increment_priv_flags_finalize(dev, priv_flags);
+	dev->priv_flags &= ~IFF_XMIT_DST_RELEASE;
+	if (dst_release_flag == (IFF_XMIT_DST_RELEASE |
+				 IFF_XMIT_DST_RELEASE_PERM))
+		dev->priv_flags |= IFF_XMIT_DST_RELEASE;
+
 	netdev_change_features(dev);
 }
 

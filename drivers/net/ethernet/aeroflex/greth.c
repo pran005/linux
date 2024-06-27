@@ -1486,8 +1486,7 @@ static int greth_of_probe(struct platform_device *ofdev)
 	if (greth->gbit_mac) {
 		dev->hw_features = NETIF_F_SG | NETIF_F_IP_CSUM |
 			NETIF_F_RXCSUM;
-		dev->features = dev->hw_features;
-		dev->priv_flags |= IFF_HIGHDMA;
+		dev->features = dev->hw_features | NETIF_F_HIGHDMA;
 		greth_netdev_ops.ndo_start_xmit = greth_start_xmit_gbit;
 	}
 

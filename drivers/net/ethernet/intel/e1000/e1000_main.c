@@ -1051,8 +1051,10 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 				NETIF_F_RXALL |
 				NETIF_F_RXFCS);
 
-	if (pci_using_dac)
-		netdev->priv_flags |= IFF_HIGHDMA;
+	if (pci_using_dac) {
+		netdev->features |= NETIF_F_HIGHDMA;
+		netdev->vlan_features |= NETIF_F_HIGHDMA;
+	}
 
 	netdev->vlan_features |= (NETIF_F_TSO |
 				  NETIF_F_HW_CSUM |

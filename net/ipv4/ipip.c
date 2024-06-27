@@ -366,6 +366,7 @@ static const struct net_device_ops ipip_netdev_ops = {
 
 #define IPIP_FEATURES (NETIF_F_SG |		\
 		       NETIF_F_FRAGLIST |	\
+		       NETIF_F_HIGHDMA |	\
 		       NETIF_F_GSO_SOFTWARE |	\
 		       NETIF_F_HW_CSUM)
 
@@ -377,7 +378,7 @@ static void ipip_tunnel_setup(struct net_device *dev)
 	dev->type		= ARPHRD_TUNNEL;
 	dev->flags		= IFF_NOARP;
 	dev->addr_len		= 4;
-	dev->priv_flags		|= IFF_LLTX | IFF_HIGHDMA;
+	dev->priv_flags		|= IFF_LLTX;
 	netif_keep_dst(dev);
 
 	dev->features		|= IPIP_FEATURES;

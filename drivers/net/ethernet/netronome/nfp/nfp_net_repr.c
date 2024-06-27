@@ -338,6 +338,7 @@ int nfp_repr_init(struct nfp_app *app, struct net_device *netdev,
 	if (repr_cap & NFP_NET_CFG_CTRL_LIVE_ADDR)
 		netdev->priv_flags |= IFF_LIVE_ADDR_CHANGE;
 
+	netdev->hw_features = NETIF_F_HIGHDMA;
 	if (repr_cap & NFP_NET_CFG_CTRL_RXCSUM_ANY)
 		netdev->hw_features |= NETIF_F_RXCSUM;
 	if (repr_cap & NFP_NET_CFG_CTRL_TXCSUM)
@@ -383,7 +384,7 @@ int nfp_repr_init(struct nfp_app *app, struct net_device *netdev,
 	netdev->features &= ~NETIF_F_HW_VLAN_STAG_RX;
 	netif_set_tso_max_segs(netdev, NFP_NET_LSO_MAX_SEGS);
 
-	netdev->priv_flags |= IFF_LOGICAL | IFF_DISABLE_NETPOLL | IFF_HIGHDMA;
+	netdev->priv_flags |= IFF_LOGICAL | IFF_DISABLE_NETPOLL;
 
 	if (nfp_app_has_tc(app)) {
 		netdev->features |= NETIF_F_HW_TC;

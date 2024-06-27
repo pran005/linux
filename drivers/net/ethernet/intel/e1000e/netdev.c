@@ -7559,7 +7559,10 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 				  NETIF_F_TSO6 |
 				  NETIF_F_HW_CSUM);
 
-	netdev->priv_flags |= IFF_UNICAST_FLT | IFF_HIGHDMA;
+	netdev->priv_flags |= IFF_UNICAST_FLT;
+
+	netdev->features |= NETIF_F_HIGHDMA;
+	netdev->vlan_features |= NETIF_F_HIGHDMA;
 
 	/* MTU range: 68 - max_hw_frame_size */
 	netdev->min_mtu = ETH_MIN_MTU;

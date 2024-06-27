@@ -5408,9 +5408,10 @@ static void mlx5e_build_nic_netdev(struct net_device *netdev)
 #endif
 	}
 
+	netdev->features         |= NETIF_F_HIGHDMA;
 	netdev->features         |= NETIF_F_HW_VLAN_STAG_FILTER;
 
-	netdev->priv_flags       |= IFF_UNICAST_FLT | IFF_HIGHDMA;
+	netdev->priv_flags       |= IFF_UNICAST_FLT;
 
 	netif_set_tso_max_size(netdev, GSO_MAX_SIZE);
 	mlx5e_set_xdp_feature(netdev);
