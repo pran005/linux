@@ -82,7 +82,9 @@ This callback should not modify hardware nor driver state (should be
 stateless).  It can be called multiple times between successive
 ndo_set_features calls.
 
-Callback must not alter features contained in NETIF_F_SOFT_FEATURES.
+Callback must not alter features contained in NETIF_F_SOFT_FEATURES or
+NETIF_F_NEVER_CHANGE sets. The exception is NETIF_F_VLAN_CHALLENGED but
+care must be taken as the change won't affect already configured VLANs.
 
  * ndo_set_features:
 
@@ -131,6 +133,13 @@ chained skbs (skb->next/prev list).
 
 Features contained in NETIF_F_SOFT_FEATURES are features of networking
 stack. Driver should not change behaviour based on them.
+
+ * VLAN challenged
+
+NETIF_F_VLAN_CHALLENGED should be set for devices which can't cope with VLAN
+headers. Some drivers set this because the cards can't handle the bigger MTU.
+[FIXME: Those cases could be fixed in VLAN code by allowing only reduced-MTU
+VLANs. This may be not useful, though.]
 
 *  rx-fcs
 
