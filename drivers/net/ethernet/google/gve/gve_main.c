@@ -1800,6 +1800,7 @@ int gve_adjust_config(struct gve_priv *priv,
 		      struct gve_tx_alloc_rings_cfg *tx_alloc_cfg,
 		      struct gve_rx_alloc_rings_cfg *rx_alloc_cfg)
 {
+	struct gve_queue_config old_rx_config = priv->rx_cfg;
 	int err;
 
 	/* Allocate resources for the new confiugration */
@@ -1817,6 +1818,12 @@ int gve_adjust_config(struct gve_priv *priv,
 			  "Adjust config failed to close old queues");
 		gve_queues_mem_free(priv, tx_alloc_cfg, rx_alloc_cfg);
 		return err;
+	}
+
+	if (old_rx_config.num_queues != rx_alloc_cfg->qcfg->num_queues) {
+		err = gve_flow_rules_reset(priv);
+		if (err)
+			return err;
 	}
 
 	/* Bring the device back up again with the new resources. */
