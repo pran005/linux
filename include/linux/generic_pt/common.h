@@ -162,6 +162,35 @@ enum {
 	PT_FEAT_AMDV1_FORCE_COHERENCE,
 };
 
+struct pt_armv8 {
+	struct pt_common common;
+	unsigned int granule_lg2sz;
+};
+
+enum {
+	/* Use the upper address space instead of lower */
+	PT_FEAT_ARMV8_TTBR1 = PT_FEAT_FMT_START,
+	/*
+	 * Large Physical Address extension allows larger page sizes on 64k.
+	 * Larger physical addresess are always supported
+	 */
+	PT_FEAT_ARMV8_LPA,
+	/* Allows 5 level paging on 4k */
+	PT_FEAT_ARMV8_LPA2,
+	/* Large Virtual Address extension allows 52-bit VA on 64k S1 */
+	PT_FEAT_ARMV8_LVA,
+	/* Use the Stage 2 format instead of Stage 1 */
+	PT_FEAT_ARMV8_S2,
+	/* Use Dirty Bit Modifier, necessary for IOMMU dirty tracking */
+	PT_FEAT_ARMV8_DBM,
+	/* For S2 uses the Force Write Back coding of the S2MEMATTR */
+	PT_FEAT_ARMV8_S2FWB,
+	/* Set the NS and NSTable bits in all entries */
+	PT_FEAT_ARMV8_NS,
+	/* Limit to AARCH32 long descriptor format features */
+	PT_FEAT_ARMV8_AARCH32,
+};
+
 struct pt_vtdss {
 	struct pt_common common;
 };
