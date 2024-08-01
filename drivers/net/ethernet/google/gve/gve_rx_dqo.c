@@ -463,7 +463,7 @@ static int gve_rx_copy_ondemand(struct gve_rx_ring *rx,
 	       buf_state->page_info.page_offset,
 	       buf_len);
 	num_frags = skb_shinfo(rx->ctx.skb_tail)->nr_frags;
-	skb_add_rx_frag(rx->ctx.skb_tail, num_frags, page,
+	skb_add_rx_frag_netmem(rx->ctx.skb_tail, num_frags, page_to_netmem(page),
 			0, buf_len, PAGE_SIZE);
 
 	u64_stats_update_begin(&rx->statss);
@@ -511,8 +511,8 @@ static int gve_rx_append_frags(struct napi_struct *napi,
 	if (gve_rx_should_trigger_copy_ondemand(rx))
 		return gve_rx_copy_ondemand(rx, buf_state, buf_len);
 
-	skb_add_rx_frag(rx->ctx.skb_tail, num_frags,
-			buf_state->page_info.page,
+	skb_add_rx_frag_netmem(rx->ctx.skb_tail, num_frags,
+			buf_state->page_info.netmem,
 			buf_state->page_info.page_offset,
 			buf_len, buf_state->page_info.buf_size);
 	gve_reuse_buffer(rx, buf_state);
@@ -559,7 +559,7 @@ static int gve_rx_dqo(struct napi_struct *napi, struct gve_rx_ring *rx,
 	/* Page might have not been used for awhile and was likely last written
 	 * by a different thread.
 	 */
-	prefetch(buf_state->page_info.page);
+	netmem_prefetch(buf_state->page_info.netmem);
 
 	/* Copy the header into the skb in the case of header split */
 	if (hsplit) {
@@ -630,7 +630,7 @@ static int gve_rx_dqo(struct napi_struct *napi, struct gve_rx_ring *rx,
 	if (rx->dqo.page_pool)
 		skb_mark_for_recycle(rx->ctx.skb_head);
 
-	skb_add_rx_frag(rx->ctx.skb_head, 0, buf_state->page_info.page,
+	skb_add_rx_frag_netmem(rx->ctx.skb_head, 0, buf_state->page_info.netmem,
 			buf_state->page_info.page_offset, buf_len,
 			buf_state->page_info.buf_size);
 	gve_reuse_buffer(rx, buf_state);

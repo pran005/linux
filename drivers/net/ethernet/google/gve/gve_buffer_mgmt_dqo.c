@@ -9,7 +9,9 @@
 
 int gve_buf_ref_cnt(struct gve_rx_buf_state_dqo *bs)
 {
-	return page_count(bs->page_info.page) - bs->page_info.pagecnt_bias;
+	return page_count(netmem_to_page(bs->page_info.netmem)) - bs->page_info.pagecnt_bias;
+
+	return 0;
 }
 
 struct gve_rx_buf_state_dqo *gve_alloc_buf_state(struct gve_rx_ring *rx)
@@ -133,17 +135,17 @@ int gve_alloc_qpl_page_dqo(struct gve_rx_ring *rx,
 				    priv->dev->name);
 		return -ENOMEM;
 	}
-	buf_state->page_info.page = rx->dqo.qpl->pages[idx];
+	buf_state->page_info.netmem = page_to_netmem(rx->dqo.qpl->pages[idx]);
 	buf_state->addr = rx->dqo.qpl->page_buses[idx];
 	rx->dqo.next_qpl_page_idx++;
 	buf_state->page_info.page_offset = 0;
 	buf_state->page_info.page_address =
-		page_address(buf_state->page_info.page);
+		netmem_address(buf_state->page_info.netmem);
 	buf_state->page_info.buf_size = priv->data_buffer_size_dqo;
 	buf_state->last_single_ref_offset = 0;
 
 	/* The page already has 1 ref. */
-	page_ref_add(buf_state->page_info.page, INT_MAX - 1);
+	page_ref_add(netmem_to_page(buf_state->page_info.netmem), INT_MAX - 1);
 	buf_state->page_info.pagecnt_bias = INT_MAX;
 
 	return 0;
@@ -151,12 +153,12 @@ int gve_alloc_qpl_page_dqo(struct gve_rx_ring *rx,
 
 void gve_free_qpl_page_dqo(struct gve_rx_buf_state_dqo *buf_state)
 {
-	if (!buf_state->page_info.page)
+	if (!buf_state->page_info.netmem)
 		return;
 
-	page_ref_sub(buf_state->page_info.page,
+	page_ref_sub(netmem_to_page(buf_state->page_info.netmem),
 		     buf_state->page_info.pagecnt_bias - 1);
-	buf_state->page_info.page = NULL;
+	buf_state->page_info.netmem = 0;
 }
 
 void gve_try_recycle_buf(struct gve_priv *priv, struct gve_rx_ring *rx,
@@ -205,32 +207,29 @@ void gve_free_to_page_pool(struct gve_rx_ring *rx,
 			   struct gve_rx_buf_state_dqo *buf_state,
 			   bool allow_direct)
 {
-	struct page *page = buf_state->page_info.page;
+	netmem_ref netmem = buf_state->page_info.netmem;
 
-	if (!page)
+	if (!netmem)
 		return;
-
-	page_pool_put_full_page(page->pp, page, allow_direct);
-	buf_state->page_info.page = NULL;
+	page_pool_put_netmem(netmem_get_pp(netmem), netmem, buf_state->page_info.buf_size, false);
+	buf_state->page_info.netmem = 0;
 }
 
 static int gve_alloc_from_page_pool(struct gve_rx_ring *rx,
 				    struct gve_rx_buf_state_dqo *buf_state)
 {
 	struct gve_priv *priv = rx->gve;
-	struct page *page;
+	netmem_ref netmem;
 
 	buf_state->page_info.buf_size = priv->data_buffer_size_dqo;
-	page = page_pool_alloc(rx->dqo.page_pool,
-			       &buf_state->page_info.page_offset,
-			       &buf_state->page_info.buf_size, GFP_ATOMIC);
-
-	if (!page)
+	netmem = page_pool_alloc_netmem(rx->dqo.page_pool, &buf_state->page_info.page_offset,
+					&buf_state->page_info.buf_size, GFP_ATOMIC);
+	if (!netmem)
 		return -ENOMEM;
 
-	buf_state->page_info.page = page;
-	buf_state->page_info.page_address = page_address(page);
-	buf_state->addr = page_pool_get_dma_addr(page);
+	buf_state->page_info.netmem = netmem;
+	buf_state->page_info.page_address = netmem_address(netmem);
+	buf_state->addr = page_pool_get_dma_addr_netmem(netmem);
 
 	return 0;
 }
@@ -269,7 +268,7 @@ void gve_reuse_buffer(struct gve_rx_ring *rx,
 		      struct gve_rx_buf_state_dqo *buf_state)
 {
 	if (rx->dqo.page_pool) {
-		buf_state->page_info.page = NULL;
+		buf_state->page_info.netmem = 0;
 		gve_free_buf_state(rx, buf_state);
 	} else {
 		gve_dec_pagecnt_bias(&buf_state->page_info);

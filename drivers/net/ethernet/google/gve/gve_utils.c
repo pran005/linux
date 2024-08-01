@@ -93,7 +93,7 @@ void gve_dec_pagecnt_bias(struct gve_rx_slot_page_info *page_info)
 {
 	page_info->pagecnt_bias--;
 	if (page_info->pagecnt_bias == 0) {
-		int pagecount = page_count(page_info->page);
+		int pagecount = page_count(netmem_to_page(page_info->netmem));
 
 		/* If we have run out of bias - set it back up to INT_MAX
 		 * minus the existing refs.
@@ -101,7 +101,7 @@ void gve_dec_pagecnt_bias(struct gve_rx_slot_page_info *page_info)
 		page_info->pagecnt_bias = INT_MAX - pagecount;
 
 		/* Set pagecount back up to max. */
-		page_ref_add(page_info->page, INT_MAX - pagecount);
+		page_ref_add(netmem_to_page(page_info->netmem), INT_MAX - pagecount);
 	}
 }
 
