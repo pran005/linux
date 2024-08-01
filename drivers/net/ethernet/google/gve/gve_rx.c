@@ -19,8 +19,8 @@ static void gve_rx_free_buffer(struct device *dev,
 	dma_addr_t dma = (dma_addr_t)(be64_to_cpu(data_slot->addr) &
 				      GVE_DATA_SLOT_ADDR_PAGE_MASK);
 
-	page_ref_sub(page_info->page, page_info->pagecnt_bias - 1);
-	gve_free_page(dev, page_info->page, dma, DMA_FROM_DEVICE);
+	page_ref_sub(netmem_to_page(page_info->netmem), page_info->pagecnt_bias - 1);
+	gve_free_page(dev, netmem_to_page(page_info->netmem), dma, DMA_FROM_DEVICE);
 }
 
 static void gve_rx_unfill_pages(struct gve_priv *priv,
@@ -39,13 +39,13 @@ static void gve_rx_unfill_pages(struct gve_priv *priv,
 					   &rx->data.data_ring[i]);
 	} else {
 		for (i = 0; i < slots; i++)
-			page_ref_sub(rx->data.page_info[i].page,
+			page_ref_sub(netmem_to_page(rx->data.page_info[i].netmem),
 				     rx->data.page_info[i].pagecnt_bias - 1);
 
 		for (i = 0; i < rx->qpl_copy_pool_mask + 1; i++) {
-			page_ref_sub(rx->qpl_copy_pool[i].page,
+			page_ref_sub(netmem_to_page(rx->qpl_copy_pool[i].netmem),
 				     rx->qpl_copy_pool[i].pagecnt_bias - 1);
-			put_page(rx->qpl_copy_pool[i].page);
+			put_page(netmem_to_page(rx->qpl_copy_pool[i].netmem));
 		}
 	}
 	kvfree(rx->data.page_info);
@@ -144,7 +144,7 @@ void gve_rx_free_ring_gqi(struct gve_priv *priv, struct gve_rx_ring *rx,
 static void gve_setup_rx_buffer(struct gve_rx_slot_page_info *page_info,
 			     dma_addr_t addr, struct page *page, __be64 *slot_addr)
 {
-	page_info->page = page;
+	page_info->netmem = page_to_netmem(page);
 	page_info->page_offset = 0;
 	page_info->page_address = page_address(page);
 	*slot_addr = cpu_to_be64(addr);
@@ -219,7 +219,7 @@ static int gve_rx_prefill_pages(struct gve_rx_ring *rx,
 				goto alloc_err_qpl;
 			}
 
-			rx->qpl_copy_pool[j].page = page;
+			rx->qpl_copy_pool[j].netmem = page_to_netmem(page);
 			rx->qpl_copy_pool[j].page_offset = 0;
 			rx->qpl_copy_pool[j].page_address = page_address(page);
 
@@ -234,16 +234,16 @@ static int gve_rx_prefill_pages(struct gve_rx_ring *rx,
 alloc_err_qpl:
 	/* Fully free the copy pool pages. */
 	while (j--) {
-		page_ref_sub(rx->qpl_copy_pool[j].page,
+		page_ref_sub(netmem_to_page(rx->qpl_copy_pool[j].netmem),
 			     rx->qpl_copy_pool[j].pagecnt_bias - 1);
-		put_page(rx->qpl_copy_pool[j].page);
+		put_page(netmem_to_page(rx->qpl_copy_pool[j].netmem));
 	}
 
 	/* Do not fully free QPL pages - only remove the bias added in this
 	 * function with gve_setup_rx_buffer.
 	 */
 	while (i--)
-		page_ref_sub(rx->data.page_info[i].page,
+		page_ref_sub(netmem_to_page(rx->data.page_info[i].netmem),
 			     rx->data.page_info[i].pagecnt_bias - 1);
 
 	return err;
@@ -479,7 +479,7 @@ static struct sk_buff *gve_rx_add_frags(struct napi_struct *napi,
 		ctx->skb_head->data_len += len;
 		ctx->skb_head->truesize += truesize;
 	}
-	skb_add_rx_frag(skb, num_frags, page_info->page,
+	skb_add_rx_frag_netmem(skb, num_frags, page_info->netmem,
 			offset, len, truesize);
 
 	return ctx->skb_head;
@@ -496,7 +496,7 @@ static void gve_rx_flip_buff(struct gve_rx_slot_page_info *page_info, __be64 *sl
 
 static int gve_rx_can_recycle_buffer(struct gve_rx_slot_page_info *page_info)
 {
-	int pagecount = page_count(page_info->page);
+	int pagecount = page_count(netmem_to_page(page_info->netmem));
 
 	/* This page is not being used by any SKBs - reuse */
 	if (pagecount == page_info->pagecnt_bias)
@@ -567,7 +567,7 @@ static struct sk_buff *gve_rx_copy_to_pool(struct gve_rx_ring *rx,
 		if (!page)
 			return NULL;
 
-		alloc_page_info.page = page;
+		alloc_page_info.netmem = page_to_netmem(page);
 		alloc_page_info.page_offset = 0;
 		alloc_page_info.page_address = page_address(page);
 		alloc_page_info.pad = page_info->pad;
@@ -603,7 +603,7 @@ static struct sk_buff *gve_rx_copy_to_pool(struct gve_rx_ring *rx,
 		 */
 		copy_page_info->can_flip = false;
 		rx->qpl_copy_pool_head++;
-		prefetch(rx->qpl_copy_pool[rx->qpl_copy_pool_head & rx->qpl_copy_pool_mask].page);
+		netmem_prefetch(rx->qpl_copy_pool[rx->qpl_copy_pool_head & rx->qpl_copy_pool_mask].netmem);
 	} else {
 		copy_page_info->can_flip = true;
 	}
@@ -835,7 +835,7 @@ static void gve_rx(struct gve_rx_ring *rx, netdev_features_t feat,
 	/* Prefetch two packet buffers ahead, we will need it soon. */
 	page_info = &rx->data.page_info[(idx + 2) & rx->mask];
 	va = page_info->page_address + page_info->page_offset;
-	prefetch(page_info->page); /* Kernel page struct. */
+	netmem_prefetch(page_info->netmem); /* Kernel page struct. */
 	prefetch(va);              /* Packet header. */
 	prefetch(va + 64);         /* Next cacheline too. */
 
@@ -982,7 +982,7 @@ static bool gve_rx_refill_buffers(struct gve_priv *priv, struct gve_rx_ring *rx)
 						&rx->data.data_ring[idx];
 				struct device *dev = &priv->pdev->dev;
 				gve_rx_free_buffer(dev, page_info, data_slot);
-				page_info->page = NULL;
+				page_info->netmem = 0;
 				if (gve_rx_alloc_buffer(priv, dev, page_info,
 							data_slot, rx)) {
 					break;
