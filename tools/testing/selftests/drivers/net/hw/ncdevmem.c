@@ -49,6 +49,7 @@
 
 #include <linux/memfd.h>
 #include <linux/dma-buf.h>
+#include <linux/errqueue.h>
 #include <linux/udmabuf.h>
 #include <libmnl/libmnl.h>
 #include <linux/types.h>
@@ -80,6 +81,7 @@ static int num_queues = -1;
 static char *ifname;
 static unsigned int ifindex;
 static unsigned int dmabuf_id;
+static unsigned int tx_dmabuf_id;
 
 struct memory_buffer {
 	int fd;
@@ -356,6 +358,49 @@ static int bind_rx_queue(unsigned int ifindex, unsigned int dmabuf_fd,
 	__netdev_bind_rx_req_set_queues(req, queues, n_queue_index);
 
 	rsp = netdev_bind_rx(*ys, req);
+static int bind_tx_queue(unsigned int ifindex, unsigned int dmabuf_fd,
+			 struct ynl_sock **ys)
+{
+	struct netdev_bind_tx_req *req = NULL;
+	struct netdev_bind_tx_rsp *rsp = NULL;
+	struct ynl_error yerr;
+
+	*ys = ynl_sock_create(&ynl_netdev_family, &yerr);
+	if (!*ys) {
+		fprintf(stderr, "YNL: %s\n", yerr.msg);
+		return -1;
+	}
+
+	req = netdev_bind_tx_req_alloc();
+	netdev_bind_tx_req_set_ifindex(req, ifindex);
+	netdev_bind_tx_req_set_fd(req, dmabuf_fd);
+
+	rsp = netdev_bind_tx(*ys, req);
+	if (!rsp) {
+		perror("netdev_bind_tx");
+		goto err_close;
+	}
+
+	if (!rsp->_present.id) {
+		perror("id not present");
+		goto err_close;
+	}
+
+	fprintf(stderr, "got tx dmabuf id=%d\n", rsp->id);
+	tx_dmabuf_id = rsp->id;
+
+	netdev_bind_tx_req_free(req);
+	netdev_bind_tx_rsp_free(rsp);
+
+	return 0;
+
+err_close:
+	fprintf(stderr, "YNL failed: %s\n", (*ys)->err.msg);
+	netdev_bind_tx_req_free(req);
+	ynl_sock_destroy(*ys);
+	return -1;
+}
+
 	if (!rsp) {
 		perror("netdev_bind_rx");
 		goto err_close;
@@ -381,7 +426,7 @@ err_close:
 	return -1;
 }
 
-int do_server(struct memory_buffer *mem)
+static int do_server(struct memory_buffer *mem)
 {
 	char ctrl_data[sizeof(int) * 20000];
 	struct netdev_queue_id *queues;
@@ -661,6 +706,169 @@ void run_devmem_tests(void)
 	provider->free(mem);
 }
 
+static void wait_compl(int fd)
+{
+	struct sock_extended_err *serr;
+	struct msghdr msg = {};
+	char control[100] = {};
+	struct cmsghdr *cm;
+	int retries = 10;
+	__u32 hi, lo;
+	int ret;
+
+	msg.msg_control = control;
+	msg.msg_controllen = sizeof(control);
+
+	while (retries--) {
+		ret = recvmsg(fd, &msg, MSG_ERRQUEUE);
+		if (ret < 0) {
+			if (errno == EAGAIN) {
+				usleep(100);
+				continue;
+			}
+			perror("recvmsg(MSG_ERRQUEUE)");
+			return;
+		}
+		if (msg.msg_flags & MSG_CTRUNC)
+			error(1, 0, "MSG_CTRUNC\n");
+
+		for (cm = CMSG_FIRSTHDR(&msg); cm; cm = CMSG_NXTHDR(&msg, cm)) {
+			if (cm->cmsg_level != SOL_IP &&
+			    cm->cmsg_level != SOL_IPV6)
+				continue;
+			if (cm->cmsg_level == SOL_IP &&
+			    cm->cmsg_type != IP_RECVERR)
+				continue;
+			if (cm->cmsg_level == SOL_IPV6 &&
+			    cm->cmsg_type != IPV6_RECVERR)
+				continue;
+
+			serr = (void *)CMSG_DATA(cm);
+			if (serr->ee_origin != SO_EE_ORIGIN_ZEROCOPY)
+				error(1, 0, "wrong origin %u", serr->ee_origin);
+			if (serr->ee_errno != 0)
+				error(1, 0, "wrong errno %d", serr->ee_errno);
+
+			hi = serr->ee_data;
+			lo = serr->ee_info;
+
+			fprintf(stderr, "tx complete [%d,%d]\n", lo, hi);
+			return;
+		}
+	}
+
+	fprintf(stderr, "did not receive tx completion\n");
+}
+
+static int do_client(struct memory_buffer *mem)
+{
+	struct sockaddr_in6 server_sin;
+	struct ynl_sock *ys = NULL;
+	ssize_t line_size = 0;
+	char *line = NULL;
+	char buffer[256];
+	size_t len = 0;
+	size_t off = 0;
+	int socket_fd;
+	int opt = 1;
+	int ret;
+
+	ret = parse_address(server_ip, atoi(port), &server_sin);
+	if (ret < 0)
+		error(-1, 0, "parse server address");
+
+	socket_fd = socket(AF_INET6, SOCK_STREAM, 0);
+	if (ret < 0) {
+		fprintf(stderr, "%s: [FAIL, create socket]\n", TEST_PREFIX);
+		exit(76);
+	}
+
+	ret = setsockopt(socket_fd, SOL_SOCKET, SO_BINDTODEVICE, ifname,
+			 strlen(ifname) + 1);
+	if (ret) {
+		fprintf(stderr, "%s: [FAIL, bindtodevice]: %s\n", TEST_PREFIX,
+			strerror(errno));
+		exit(76);
+	}
+
+	if (bind_tx_queue(ifindex, mem->fd, &ys))
+		error(1, 0, "Failed to bind\n");
+
+	ret = setsockopt(socket_fd, SOL_SOCKET, SO_ZEROCOPY, &opt, sizeof(opt));
+	if (ret) {
+		fprintf(stderr, "%s: [FAIL, set sock opt]: %s\n", TEST_PREFIX,
+			strerror(errno));
+		exit(76);
+	}
+
+	inet_ntop(AF_INET6, &server_sin.sin6_addr, buffer, sizeof(buffer));
+	fprintf(stderr, "Connect to %s %d (via %s)\n", buffer,
+		ntohs(server_sin.sin6_port), ifname);
+
+	ret = connect(socket_fd, &server_sin, sizeof(server_sin));
+	if (ret) {
+		fprintf(stderr, "%s: [FAIL, connect]: %s\n", TEST_PREFIX,
+			strerror(errno));
+		exit(76);
+	}
+
+	while (1) {
+		free(line);
+		line = NULL;
+		line_size = getline(&line, &len, stdin);
+
+		if (line_size < 0)
+			break;
+
+		fprintf(stderr, "DEBUG: read line_size=%ld\n", line_size);
+
+		provider->memcpy_to_device(mem, off, line, line_size);
+
+		while (line_size) {
+			struct iovec iov = {
+				.iov_base = (void *)off,
+				.iov_len = line_size,
+			};
+			char ctrl_data[CMSG_SPACE(sizeof(int))];
+			struct msghdr msg = {};
+			struct cmsghdr *cmsg;
+
+			msg.msg_iov = &iov;
+			msg.msg_iovlen = 1;
+
+			msg.msg_control = ctrl_data;
+			msg.msg_controllen = sizeof(ctrl_data);
+
+			cmsg = CMSG_FIRSTHDR(&msg);
+			cmsg->cmsg_level = SOL_SOCKET;
+			cmsg->cmsg_type = SCM_DEVMEM_DMABUF;
+			cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+			*((int *)CMSG_DATA(cmsg)) = tx_dmabuf_id;
+
+			ret = sendmsg(socket_fd, &msg, MSG_SOCK_DEVMEM);
+			if (ret < 0)
+				continue;
+			else
+				fprintf(stderr, "DEBUG: sendmsg_ret=%d\n", ret);
+
+			off += ret;
+			line_size -= ret;
+
+			wait_compl(socket_fd);
+		}
+	}
+
+	fprintf(stderr, "%s: tx ok\n", TEST_PREFIX);
+
+	free(line);
+	close(socket_fd);
+
+	if (ys)
+		ynl_sock_destroy(ys);
+
+	return 0;
+}
+
 int main(int argc, char *argv[])
 {
 	struct memory_buffer *mem;
@@ -747,7 +955,7 @@ int main(int argc, char *argv[])
 		error(1, 0, "Missing -p argument\n");
 
 	mem = provider->alloc(getpagesize() * NUM_PAGES);
-	ret = is_server ? do_server(mem) : 1;
+	ret = is_server ? do_server(mem) : do_client(mem);
 	provider->free(mem);
 
 	return ret;
