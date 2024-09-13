@@ -11,6 +11,7 @@
 #define _NET_DEVMEM_H
 
 struct netlink_ext_ack;
+#include <linux/dma-direction.h>
 
 struct net_devmem_dmabuf_binding {
 	struct dma_buf *dmabuf;
@@ -27,8 +28,15 @@ struct net_devmem_dmabuf_binding {
 	 * The binding undos itself and unmaps the underlying dmabuf once all
 	 * those refs are dropped and the binding is no longer desired or in
 	 * use.
+	 *
+	 * For TX, each skb frag holds a reference.
 	 */
 	refcount_t ref;
+
+	/* XArray lookups happen under RCU lock so we need to keep the dead
+	 * bindings around until next grace period.
+	 */
+	struct rcu_head rcu;
 
 	/* The list of bindings currently active. Used for netlink to notify us
 	 * of the user dropping the bind.
@@ -42,6 +50,10 @@ struct net_devmem_dmabuf_binding {
 	 * active.
 	 */
 	u32 id;
+
+	/* iov_iter representing all possible net_iov chunks in the dmabuf. */
+	struct iov_iter tx_iter;
+	struct iovec *tx_vec;
 };
 
 #if defined(CONFIG_NET_DEVMEM)
@@ -66,8 +78,10 @@ struct dmabuf_genpool_chunk_owner {
 
 void __net_devmem_dmabuf_binding_free(struct net_devmem_dmabuf_binding *binding);
 struct net_devmem_dmabuf_binding *
-net_devmem_bind_dmabuf(struct net_device *dev, unsigned int dmabuf_fd,
+net_devmem_bind_dmabuf(struct net_device *dev, enum dma_data_direction direction,
+		       unsigned int dmabuf_fd,
 		       struct netlink_ext_ack *extack);
+struct net_devmem_dmabuf_binding *net_devmem_lookup_dmabuf(u32 id);
 void net_devmem_unbind_dmabuf(struct net_devmem_dmabuf_binding *binding);
 int net_devmem_bind_dmabuf_to_queue(struct net_device *dev, u32 rxq_idx,
 				    struct net_devmem_dmabuf_binding *binding,
@@ -104,15 +118,18 @@ static inline u32 net_iov_binding_id(const struct net_iov *niov)
 	return net_iov_owner(niov)->binding->id;
 }
 
-static inline void
+static inline int
 net_devmem_dmabuf_binding_get(struct net_devmem_dmabuf_binding *binding)
 {
-	refcount_inc(&binding->ref);
+	return refcount_inc_not_zero(&binding->ref);
 }
 
 static inline void
 net_devmem_dmabuf_binding_put(struct net_devmem_dmabuf_binding *binding)
 {
+	if (!binding)
+		return;
+
 	if (!refcount_dec_and_test(&binding->ref))
 		return;
 
@@ -133,11 +150,16 @@ __net_devmem_dmabuf_binding_free(struct net_devmem_dmabuf_binding *binding)
 
 static inline struct net_devmem_dmabuf_binding *
 net_devmem_bind_dmabuf(struct net_device *dev, unsigned int dmabuf_fd,
+		       enum dma_data_direction direction,
 		       struct netlink_ext_ack *extack)
 {
 	return ERR_PTR(-EOPNOTSUPP);
 }
 
+static inline struct net_devmem_dmabuf_binding *net_devmem_lookup_dmabuf(u32 id)
+{
+	return NULL;
+}
 static inline void
 net_devmem_unbind_dmabuf(struct net_devmem_dmabuf_binding *binding)
 {

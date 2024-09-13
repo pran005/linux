@@ -1051,6 +1051,7 @@ int tcp_sendmsg_fastopen(struct sock *sk, struct msghdr *msg, int *copied,
 
 int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 {
+	struct net_devmem_dmabuf_binding *binding = NULL;
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct ubuf_info *uarg = NULL;
 	struct sk_buff *skb;
@@ -1080,6 +1081,21 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 			else
 				uarg_to_msgzc(uarg)->zerocopy = 0;
 		}
+	} else if (flags & MSG_SOCK_DEVMEM) {
+		if (!(sk->sk_route_caps & NETIF_F_SG) || msg->msg_ubuf ||
+		    !sock_flag(sk, SOCK_ZEROCOPY)) {
+			err = -EINVAL;
+			goto out_err;
+		}
+
+		skb = tcp_write_queue_tail(sk);
+		uarg = msg_zerocopy_realloc(sk, size, skb_zcopy(skb));
+		if (!uarg) {
+			err = -ENOBUFS;
+			goto out_err;
+		}
+
+		zc = MSG_ZEROCOPY;
 	} else if (unlikely(msg->msg_flags & MSG_SPLICE_PAGES) && size) {
 		if (sk->sk_route_caps & NETIF_F_SG)
 			zc = MSG_SPLICE_PAGES;
@@ -1127,6 +1143,24 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 	if (msg->msg_controllen) {
 		err = sock_cmsg_send(sk, msg, &sockc);
 		if (unlikely(err)) {
+			err = -EINVAL;
+			goto out_err;
+		}
+	}
+
+	if (unlikely(flags & MSG_SOCK_DEVMEM)) {
+		if (sockc.devmem_id == 0) {
+			err = -EINVAL;
+			goto out_err;
+		}
+
+		binding = net_devmem_lookup_dmabuf(sockc.devmem_id);
+		if (!binding || !binding->tx_vec) {
+			err = -EINVAL;
+			goto out_err;
+		}
+
+		if (sock_net(sk) != dev_net(binding->dev)) {
 			err = -EINVAL;
 			goto out_err;
 		}
@@ -1248,7 +1282,7 @@ new_segment:
 					goto wait_for_space;
 			}
 
-			err = skb_zerocopy_iter_stream(sk, skb, msg, copy, uarg);
+			err = skb_zerocopy_iter_stream(sk, skb, msg, copy, uarg, binding);
 			if (err == -EMSGSIZE || err == -EEXIST) {
 				tcp_mark_push(tp, skb);
 				goto new_segment;
@@ -1329,6 +1363,7 @@ out_nopush:
 	/* msg->msg_ubuf is pinned by the caller so we don't take extra refs */
 	if (uarg && !msg->msg_ubuf)
 		net_zcopy_put(uarg);
+	net_devmem_dmabuf_binding_put(binding);
 	return copied + copied_syn;
 
 do_error:
@@ -1346,6 +1381,7 @@ out_err:
 		sk->sk_write_space(sk);
 		tcp_chrono_stop(sk, TCP_CHRONO_SNDBUF_LIMITED);
 	}
+	net_devmem_dmabuf_binding_put(binding);
 	return err;
 }
 EXPORT_SYMBOL_GPL(tcp_sendmsg_locked);

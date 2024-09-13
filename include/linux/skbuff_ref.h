@@ -8,6 +8,7 @@
 #define _LINUX_SKBUFF_REF_H
 
 #include <linux/skbuff.h>
+#include <net/devmem.h> /* this is a hack */
 
 /**
  * __skb_frag_ref - take an addition reference on a paged fragment.
@@ -17,6 +18,13 @@
  */
 static inline void __skb_frag_ref(skb_frag_t *frag)
 {
+	if (netmem_is_net_iov(frag->netmem)) {
+		struct net_iov *niov = netmem_to_net_iov(frag->netmem);
+
+		net_devmem_dmabuf_binding_get(niov->owner->binding);
+		return;
+	}
+
 	get_page(skb_frag_page(frag));
 }
 
@@ -36,6 +44,15 @@ bool napi_pp_put_page(netmem_ref netmem);
 
 static inline void skb_page_unref(netmem_ref netmem, bool recycle)
 {
+	/* TODO: find a better place to deref TX binding */
+	if (netmem_is_net_iov(netmem)) {
+		struct net_iov *niov = netmem_to_net_iov(netmem);
+
+		if (niov->owner->binding->tx_vec) {
+			net_devmem_dmabuf_binding_put(niov->owner->binding);
+			return;
+		}
+	}
 #ifdef CONFIG_PAGE_POOL
 	if (recycle && napi_pp_put_page(netmem))
 		return;

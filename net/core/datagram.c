@@ -61,6 +61,7 @@
 #include <net/tcp_states.h>
 #include <trace/events/skb.h>
 #include <net/busy_poll.h>
+#include <net/devmem.h> /* this is a hack */
 #include <crypto/hash.h>
 
 /*
@@ -692,9 +693,54 @@ int zerocopy_fill_skb_from_iter(struct sk_buff *skb,
 	return 0;
 }
 
+static int zerocopy_fill_skb_from_devmem(struct sk_buff *skb,
+					 struct iov_iter *from, int length,
+					 struct net_devmem_dmabuf_binding *binding)
+{
+	struct iov_iter niov_iter = binding->tx_iter;
+	int i = skb_shinfo(skb)->nr_frags;
+	struct net_iov *niov;
+	ssize_t prev_off = 0;
+	size_t size;
+
+	while (length && iov_iter_count(from)) {
+		ssize_t delta;
+
+		if (unlikely(i == MAX_SKB_FRAGS))
+			return -EMSGSIZE;
+
+		delta = (ssize_t)iter_iov_addr(from) - prev_off;
+		prev_off = (ssize_t)iter_iov_addr(from);
+
+		if (likely(delta >= 0))
+			iov_iter_advance(&niov_iter, delta);
+		else
+			iov_iter_revert(&niov_iter, -delta);
+
+		size = min_t(size_t, iter_iov_len(from), length);
+		size = min_t(size_t, iter_iov_len(&niov_iter), size);
+		if (!size)
+			return -EFAULT;
+
+		if (!net_devmem_dmabuf_binding_get(binding))
+			return -EFAULT;
+
+		niov = iter_iov(&niov_iter)->iov_base;
+		skb_add_rx_frag_netmem(skb, i, net_iov_to_netmem(niov),
+				       niov_iter.iov_offset, size, PAGE_SIZE);
+
+		iov_iter_advance(from, size);
+		length -= size;
+		i++;
+	}
+
+	return 0;
+}
+
 int __zerocopy_sg_from_iter(struct msghdr *msg, struct sock *sk,
 			    struct sk_buff *skb, struct iov_iter *from,
-			    size_t length)
+			    size_t length,
+			    struct net_devmem_dmabuf_binding *binding)
 {
 	unsigned long orig_size = skb->truesize;
 	unsigned long truesize;
@@ -702,6 +748,8 @@ int __zerocopy_sg_from_iter(struct msghdr *msg, struct sock *sk,
 
 	if (msg && msg->msg_ubuf && msg->sg_from_iter)
 		ret = msg->sg_from_iter(skb, from, length);
+	else if (unlikely(binding))
+		ret = zerocopy_fill_skb_from_devmem(skb, from, length, binding);
 	else
 		ret = zerocopy_fill_skb_from_iter(skb, from, length);
 
@@ -735,7 +783,7 @@ int zerocopy_sg_from_iter(struct sk_buff *skb, struct iov_iter *from)
 	if (skb_copy_datagram_from_iter(skb, 0, from, copy))
 		return -EFAULT;
 
-	return __zerocopy_sg_from_iter(NULL, NULL, skb, from, ~0U);
+	return __zerocopy_sg_from_iter(NULL, NULL, skb, from, ~0U, NULL);
 }
 EXPORT_SYMBOL(zerocopy_sg_from_iter);
 

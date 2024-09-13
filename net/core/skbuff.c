@@ -1021,6 +1021,8 @@ EXPORT_SYMBOL(skb_cow_data_for_xdp);
 #if IS_ENABLED(CONFIG_PAGE_POOL)
 bool napi_pp_put_page(netmem_ref netmem)
 {
+	struct net_iov *niov;
+
 	netmem = netmem_compound_head(netmem);
 
 	/* page->pp_magic is OR'ed with PP_SIGNATURE after the allocation
@@ -1030,8 +1032,13 @@ bool napi_pp_put_page(netmem_ref netmem)
 	 * and page_is_pfmemalloc() is checked in __page_pool_put_page()
 	 * to avoid recycling the pfmemalloc page.
 	 */
-	if (unlikely(!is_pp_netmem(netmem)))
+	if (unlikely(!is_pp_netmem(netmem))) {
+		/* avoid triggering WARN_ON's for loopback mode */
+		niov = netmem_to_net_iov(netmem);
+		if (niov && niov->owner && niov->owner->binding->tx_vec)
+			return true;
 		return false;
+	}
 
 	page_pool_put_full_netmem(netmem_get_pp(netmem), netmem, false);
 
@@ -1880,8 +1887,8 @@ const struct ubuf_info_ops msg_zerocopy_ubuf_ops = {
 EXPORT_SYMBOL_GPL(msg_zerocopy_ubuf_ops);
 
 int skb_zerocopy_iter_stream(struct sock *sk, struct sk_buff *skb,
-			     struct msghdr *msg, int len,
-			     struct ubuf_info *uarg)
+			     struct msghdr *msg, int len, struct ubuf_info *uarg,
+			     struct net_devmem_dmabuf_binding *binding)
 {
 	int err, orig_len = skb->len;
 
@@ -1900,7 +1907,7 @@ int skb_zerocopy_iter_stream(struct sock *sk, struct sk_buff *skb,
 			return -EEXIST;
 	}
 
-	err = __zerocopy_sg_from_iter(msg, sk, skb, &msg->msg_iter, len);
+	err = __zerocopy_sg_from_iter(msg, sk, skb, &msg->msg_iter, len, binding);
 	if (err == -EFAULT || (err == -EMSGSIZE && skb->len == orig_len)) {
 		struct sock *save_sk = skb->sk;
 
@@ -1969,11 +1976,11 @@ int skb_copy_ubufs(struct sk_buff *skb, gfp_t gfp_mask)
 	int i, order, psize, new_frags;
 	u32 d_off;
 
+	if (!skb_frags_readable(skb))
+		return 0;
+
 	if (skb_shared(skb) || skb_unclone(skb, gfp_mask))
 		return -EINVAL;
-
-	if (!skb_frags_readable(skb))
-		return -EFAULT;
 
 	if (!num_frags)
 		goto release;

@@ -23,7 +23,7 @@
 
 /* Device memory support */
 
-/* Protected by rtnl_lock() */
+static DEFINE_MUTEX(net_devmem_dmabuf_lock);
 static DEFINE_XARRAY_FLAGS(net_devmem_dmabuf_bindings, XA_FLAGS_ALLOC1);
 
 static void net_devmem_dmabuf_free_chunk_owner(struct gen_pool *genpool,
@@ -65,8 +65,9 @@ void __net_devmem_dmabuf_binding_free(struct net_devmem_dmabuf_binding *binding)
 	xa_destroy(&binding->bound_rxqs);
 	kfree(binding);
 
-	mina_debug(0, 1, "freeing binding");
+	kfree_rcu(binding, rcu);
 }
+EXPORT_SYMBOL(__net_devmem_dmabuf_binding_free);
 
 struct net_iov *
 net_devmem_alloc_dmabuf(struct net_devmem_dmabuf_binding *binding)
@@ -124,7 +125,9 @@ void net_devmem_unbind_dmabuf(struct net_devmem_dmabuf_binding *binding)
 		WARN_ON(netdev_rx_queue_restart(binding->dev, rxq_idx));
 	}
 
+	mutex_lock(&net_devmem_dmabuf_lock);
 	xa_erase(&net_devmem_dmabuf_bindings, binding->id);
+	mutex_unlock(&net_devmem_dmabuf_lock);
 
 	net_devmem_dmabuf_binding_put(binding);
 }
@@ -175,9 +178,10 @@ err_xa_erase:
 	return err;
 }
 
-struct net_devmem_dmabuf_binding *
-net_devmem_bind_dmabuf(struct net_device *dev, unsigned int dmabuf_fd,
-		       struct netlink_ext_ack *extack)
+struct net_devmem_dmabuf_binding *net_devmem_bind_dmabuf(struct net_device *dev,
+							 enum dma_data_direction direction,
+							 unsigned int dmabuf_fd,
+							 struct netlink_ext_ack *extack)
 {
 	struct net_devmem_dmabuf_binding *binding;
 	static u32 id_alloc_next;
@@ -185,6 +189,7 @@ net_devmem_bind_dmabuf(struct net_device *dev, unsigned int dmabuf_fd,
 	struct dma_buf *dmabuf;
 	unsigned int sg_idx, i;
 	unsigned long virtual;
+	struct iovec *iov;
 	int err;
 
 	dmabuf = dma_buf_get(dmabuf_fd);
@@ -200,9 +205,14 @@ net_devmem_bind_dmabuf(struct net_device *dev, unsigned int dmabuf_fd,
 
 	binding->dev = dev;
 
+	/* TODO: move xa_alloc_cyclic as the last step to make sure binding
+	 * lookups get consistent object
+	 */
+	mutex_lock(&net_devmem_dmabuf_lock);
 	err = xa_alloc_cyclic(&net_devmem_dmabuf_bindings, &binding->id,
 			      binding, xa_limit_32b, &id_alloc_next,
 			      GFP_KERNEL);
+	mutex_unlock(&net_devmem_dmabuf_lock);
 	if (err < 0)
 		goto err_free_binding;
 
@@ -220,10 +230,19 @@ net_devmem_bind_dmabuf(struct net_device *dev, unsigned int dmabuf_fd,
 	}
 
 	binding->sgt = dma_buf_map_attachment_unlocked(binding->attachment,
-						       DMA_FROM_DEVICE);
+						       direction);
 	if (IS_ERR(binding->sgt)) {
 		err = PTR_ERR(binding->sgt);
 		NL_SET_ERR_MSG(extack, "Failed to map dmabuf attachment");
+		goto err_detach;
+	}
+
+	/* dma_buf_map_attachment_unlocked can return non-zero sgt with
+	 * zero entries
+	 */
+	if (!binding->sgt || binding->sgt->nents == 0) {
+		err = -EINVAL;
+		NL_SET_ERR_MSG(extack, "Empty dmabuf attachment");
 		goto err_detach;
 	}
 
@@ -236,6 +255,20 @@ net_devmem_bind_dmabuf(struct net_device *dev, unsigned int dmabuf_fd,
 	if (!binding->chunk_pool) {
 		err = -ENOMEM;
 		goto err_unmap;
+	}
+
+	if (direction == DMA_TO_DEVICE) {
+		virtual = 0;
+		for_each_sgtable_dma_sg(binding->sgt, sg, sg_idx)
+			virtual += sg_dma_len(sg);
+
+		/* TODO: clearly separate RX and TX paths? */
+		binding->tx_vec =
+			kcalloc(virtual / PAGE_SIZE + 1, sizeof(struct iovec), GFP_KERNEL);
+		if (!binding->tx_vec) {
+			err = -ENOMEM;
+			goto err_unmap;
+		}
 	}
 
 	virtual = 0;
@@ -279,10 +312,20 @@ net_devmem_bind_dmabuf(struct net_device *dev, unsigned int dmabuf_fd,
 			niov->owner = owner;
 			page_pool_set_dma_addr_netmem(net_iov_to_netmem(niov),
 						      net_devmem_get_dma_addr(niov));
+
+			if (direction == DMA_TO_DEVICE) {
+				iov = &binding->tx_vec[virtual / PAGE_SIZE + i];
+				iov->iov_base = niov;
+				iov->iov_len = PAGE_SIZE;
+			}
 		}
 
 		virtual += len;
 	}
+
+	if (direction == DMA_TO_DEVICE)
+		iov_iter_init(&binding->tx_iter, WRITE, binding->tx_vec, virtual / PAGE_SIZE + 1,
+			      virtual);
 
 	return binding;
 
@@ -296,12 +339,29 @@ err_unmap:
 err_detach:
 	dma_buf_detach(dmabuf, binding->attachment);
 err_free_id:
+	mutex_lock(&net_devmem_dmabuf_lock);
 	xa_erase(&net_devmem_dmabuf_bindings, binding->id);
+	mutex_unlock(&net_devmem_dmabuf_lock);
 err_free_binding:
 	kfree(binding);
 err_put_dmabuf:
 	dma_buf_put(dmabuf);
 	return ERR_PTR(err);
+}
+
+struct net_devmem_dmabuf_binding *net_devmem_lookup_dmabuf(u32 id)
+{
+	struct net_devmem_dmabuf_binding *binding;
+
+	rcu_read_lock();
+	binding = xa_load(&net_devmem_dmabuf_bindings, id);
+	if (binding) {
+		if (!net_devmem_dmabuf_binding_get(binding))
+			binding = NULL;
+	}
+	rcu_read_unlock();
+
+	return binding;
 }
 
 void dev_dmabuf_uninstall(struct net_device *dev)

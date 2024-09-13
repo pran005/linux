@@ -198,6 +198,19 @@ void dma_unmap_page_attrs(struct device *dev, dma_addr_t addr, size_t size,
 }
 EXPORT_SYMBOL(dma_unmap_page_attrs);
 
+static int dma_map_dummy(struct scatterlist *sgl, int nents)
+{
+	struct scatterlist *sg;
+	int i;
+
+	for_each_sg(sgl, sg, nents, i) {
+		sg->dma_address = (dma_addr_t)sg_page(sg);
+		sg_dma_len(sg) = sg->length;
+	}
+
+	return nents;
+}
+
 static int __dma_map_sg_attrs(struct device *dev, struct scatterlist *sg,
 	 int nents, enum dma_data_direction dir, unsigned long attrs)
 {
@@ -206,8 +219,9 @@ static int __dma_map_sg_attrs(struct device *dev, struct scatterlist *sg,
 
 	BUG_ON(!valid_dma_direction(dir));
 
-	if (WARN_ON_ONCE(!dev->dma_mask))
-		return 0;
+	/* TODO: this is here only for loopback mode to have a DMA addr */
+	if (!dev->dma_mask)
+		return dma_map_dummy(sg, nents);
 
 	if (dma_map_direct(dev, ops) ||
 	    arch_dma_map_sg_direct(dev, sg, nents))

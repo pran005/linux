@@ -1814,6 +1814,7 @@ struct sockcm_cookie {
 	u32 mark;
 	u32 tsflags;
 	u32 ts_opt_id;
+	u32 devmem_id;
 };
 
 static inline void sockcm_init(struct sockcm_cookie *sockc,
