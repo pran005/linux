@@ -392,6 +392,17 @@ int do_server(void)
 			}
 
 			token.token_start = dmabuf_cmsg->frag_token;
+			token.token_count = 8192;
+
+			ret = setsockopt(client_fd, SOL_SOCKET,
+					 SO_DEVMEM_DONTNEED, &token,
+					 sizeof(token));
+			if (ret >= 0)
+				error(1, 0,
+				      "DONTNEED of too many frags should have failed. ret=%ld\n",
+				      ret);
+
+			token.token_start = dmabuf_cmsg->frag_token;
 			token.token_count = 1;
 
 			total_received += dmabuf_cmsg->frag_size;
