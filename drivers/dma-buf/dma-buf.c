@@ -1668,7 +1668,7 @@ static long dma_buf_create_pages(struct file *file,
 	mina_debug(0, 1, "binding to netdev=%s, queue_mask=0x%llx", netdev->name,
 			create_info->queue_mask);
 
-	binding = net_devmem_bind_dmabuf(netdev, dmabuf_fd, NULL);
+	binding = net_devmem_bind_dmabuf(netdev, DMA_FROM_DEVICE, dmabuf_fd, NULL);
 	if (IS_ERR(binding)) {
 		err = PTR_ERR(binding);
 		goto err_unlock;
