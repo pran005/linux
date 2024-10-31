@@ -13,11 +13,11 @@ echo $random_port
 
 
 sudo make headers_install
-sudo CFLAGS="-static" make -C ./tools/testing/selftests/net TARGETS=ncdevmem
+sudo CFLAGS="-static" make -C ./tools/testing/selftests/drivers/net/hw TARGETS=ncdevmem
 
 set +e
-staging_gcloud compute scp ./tools/testing/selftests/net/ncdevmem $instance1:~/
-staging_gcloud compute scp ./tools/testing/selftests/net/ncdevmem $instance2:~/
+staging_gcloud compute scp ./tools/testing/selftests/drivers/net/hw/ncdevmem $instance1:~/
+staging_gcloud compute scp ./tools/testing/selftests/drivers/net/hw/ncdevmem $instance2:~/
 set -e
 
 CLIENT=$(staging_gcloud compute ssh $instance2 -- "ifconfig | grep -i 'inet 192.168.1.'" | awk '{print $2}')
@@ -31,8 +31,8 @@ sed -i "s/CLIENT/$CLIENT/g" scripts/client
 staging_gcloud compute scp scripts/server $instance1:~/
 staging_gcloud compute scp scripts/client $instance2:~/
 
-staging_gcloud compute scp ./lib/bench_page_pool_simple.ko $instance1:~/
-staging_gcloud compute scp ./lib/bench_page_pool_simple.ko $instance2:~/
+# staging_gcloud compute scp ./lib/bench_page_pool_simple.ko $instance1:~/
+# staging_gcloud compute scp ./lib/bench_page_pool_simple.ko $instance2:~/
 
 staging_gcloud compute scp ~/neper/tcp_stream $instance1:~/
 staging_gcloud compute scp ~/neper/tcp_stream $instance2:~/

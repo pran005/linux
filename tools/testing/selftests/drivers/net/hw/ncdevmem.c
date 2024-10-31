@@ -557,8 +557,7 @@ int do_server(struct memory_buffer *mem)
 
 			if (do_validation)
 				validate_buffer(
-					((unsigned char *)tmp_mem) +
-						dmabuf_cmsg->frag_offset,
+					((unsigned char *)tmp_mem),
 					dmabuf_cmsg->frag_size);
 			else
 				print_nonzero_bytes(tmp_mem, dmabuf_cmsg->frag_size);
