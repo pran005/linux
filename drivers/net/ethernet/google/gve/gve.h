@@ -14,6 +14,7 @@
 #include <linux/pci.h>
 #include <linux/u64_stats_sync.h>
 #include <net/page_pool/helpers.h>
+#include <net/page_pool/types.h>
 #include <net/xdp.h>
 
 #include "gve_desc.h"
