@@ -19,8 +19,8 @@ Benefits of Netmem :
 * Simplified Development: Drivers interact with a consistent API,
   regardless of the underlying memory implementation.
 
-Driver Requirements
-===================
+Driver RX Requirements
+======================
 
 1. The driver must support page_pool.
 
@@ -77,3 +77,13 @@ Driver Requirements
    that purpose, but be mindful that some netmem types might have longer
    circulation times, such as when userspace holds a reference in zerocopy
    scenarios.
+
+Driver TX Requirements
+======================
+
+1. Driver should use netmem_dma_unmap_page_attrs() in lieu of
+   dma_unmap_page[_attrs](), and netmem_dma_unmap_addr_set() in lieu of
+   dma_unmap_addr_set(). The netmem variants will handle netmems that should
+   not be dma-unmapped by the driver, such as dma-buf netmems.
+
+2. Driver should declare support by setting `netdev->netmem_tx = true`
