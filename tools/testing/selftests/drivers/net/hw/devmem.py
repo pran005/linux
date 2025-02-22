@@ -21,14 +21,25 @@ def require_devmem(cfg):
 def check_rx(cfg, ipver) -> None:
     require_devmem(cfg)
 
+    is_5_tuple_flow_steering = True
+
     addr = cfg.addr_v[ipver]
+    remote_addr = cfg.remote_addr_v[ipver]
+    port = rand_port()
+
     if ipver == "6":
         addr = "[" + addr + "]"
+        remote_addr = "[" + remote_addr + "]"
 
     socat = f"socat -u - TCP{ipver}:{addr}:{port}"
 
-    port = rand_port()
-    listen_cmd = f"{cfg.bin_local} -l -f {cfg.ifname} -s {cfg.addr_v['6']} -p {port}"
+    if is_5_tuple_flow_steering:
+        socat += f",bind={remote_addr}:{port}"
+
+    listen_cmd = f"{cfg.bin_local} -l -f {cfg.ifname} -s {addr} -p {port}"
+
+    if is_5_tuple_flow_steering:
+        listen_cmd += f" -c {remote_addr}"
 
     with bkg(listen_cmd, exit_wait=True) as ncdevmem:
         wait_port_listen(port)
