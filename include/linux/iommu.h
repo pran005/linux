@@ -366,29 +366,26 @@ struct iommu_iotlb_gather {
 	 */
 	unsigned long		end;
 
-	union {
+	/**
+	 * @pt: Information about the unmapped levels, used by generic_pt
+	 *      based drivers (e.g. iommupt)
+	 */
+	struct {
 		/**
-		 * @pgsize: The interval at which to perform the flush, only
-		 *          used by arm-smmu-v3
+		 * @pt.leaf_levels_bitmap: Bitmap of generic_pt
+		 * levels where leaf entries were unmapped. Bit 0
+		 * means the leaf only level. If 0 no leafs
+		 * were unmapped.
 		 */
-		size_t pgsize;
-		struct {
-			/**
-			 * @pt.leaf_levels_bitmap: Bitmap of generic_pt
-			 * levels where leaf entries were unmapped. Bit 0
-			 * means the leaf only level. If 0 no leafs
-			 * were unmapped.
-			 */
-			u8 leaf_levels_bitmap;
-			/**
-			 * @pt.table_levels_bitmap: Bitmap of generic_pt levels
-			 * of table entries that were removed. Bit 0 is never
-			 * set, bit 1 means a table of all leafs was removed.
-			 * When freelist is empty this must be 0.
-			 */
-			u8 table_levels_bitmap;
-		} pt;
-	};
+		u8 leaf_levels_bitmap;
+		/**
+		 * @pt.table_levels_bitmap: Bitmap of generic_pt levels
+		 * of table entries that were removed. Bit 0 is never
+		 * set, bit 1 means a table of all leafs was removed.
+		 * When freelist is empty this must be 0.
+		 */
+		u8 table_levels_bitmap;
+	} pt;
 
 	/**
 	 * @freelist: Removed pages to free after sync, only used by
@@ -1103,15 +1100,12 @@ static inline void iommu_iotlb_gather_add_page(struct iommu_domain *domain,
 					       unsigned long iova, size_t size)
 {
 	/*
-	 * If the new page is disjoint from the current range or is mapped at
-	 * a different granularity, then sync the TLB so that the gather
-	 * structure can be rewritten.
+	 * If the new page is disjoint from the current range, then sync the TLB
+	 * so that the gather structure can be rewritten.
 	 */
-	if ((gather->pgsize && gather->pgsize != size) ||
-	    iommu_iotlb_gather_is_disjoint(gather, iova, size))
+	if (iommu_iotlb_gather_is_disjoint(gather, iova, size))
 		iommu_iotlb_sync(domain, gather);
 
-	gather->pgsize = size;
 	iommu_iotlb_gather_add_range(gather, iova, size);
 }
 

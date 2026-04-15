@@ -1012,13 +1012,13 @@ static void NS(unpreserve)(struct pt_iommu *iommu_table, struct iommu_domain_ser
 	struct pt_common *common = common_from_iommu(iommu_table);
 	struct pt_range range = pt_all_range(common);
 	struct pt_iommu_collect_args collect = {
-		.free_list = IOMMU_PAGES_LIST_INIT(collect.free_list),
+		.pending.free_list = IOMMU_PAGES_LIST_INIT(collect.pending.free_list),
 	};
 
-	iommu_pages_list_add(&collect.free_list, range.top_table);
+	iommu_pages_list_add(&collect.pending.free_list, range.top_table);
 	pt_walk_range(&range, __collect_tables, &collect);
 
-	iommu_unpreserve_pages_list(&collect.free_list);
+	iommu_unpreserve_pages_list(&collect.pending.free_list);
 }
 
 static int NS(preserve)(struct pt_iommu *iommu_table, struct iommu_domain_ser *ser)
@@ -1026,14 +1026,14 @@ static int NS(preserve)(struct pt_iommu *iommu_table, struct iommu_domain_ser *s
 	struct pt_common *common = common_from_iommu(iommu_table);
 	struct pt_range range = pt_all_range(common);
 	struct pt_iommu_collect_args collect = {
-		.free_list = IOMMU_PAGES_LIST_INIT(collect.free_list),
+		.pending.free_list = IOMMU_PAGES_LIST_INIT(collect.pending.free_list),
 	};
 	int ret;
 
-	iommu_pages_list_add(&collect.free_list, range.top_table);
+	iommu_pages_list_add(&collect.pending.free_list, range.top_table);
 	pt_walk_range(&range, __collect_tables, &collect);
 
-	ret = iommu_preserve_pages_list(&collect.free_list);
+	ret = iommu_preserve_pages_list(&collect.pending.free_list);
 	if (ret)
 		return ret;
 

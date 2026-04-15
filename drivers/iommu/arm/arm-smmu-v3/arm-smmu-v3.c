@@ -34,6 +34,7 @@
 
 #include "arm-smmu-v3.h"
 #include "../../dma-iommu.h"
+#include "../../iommu-pages.h"
 
 static bool disable_msipolling;
 module_param(disable_msipolling, bool, 0444);
@@ -2845,7 +2846,7 @@ static void arm_smmu_domain_free_paging(struct iommu_domain *domain)
 	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
 	struct arm_smmu_device *smmu = smmu_domain->smmu;
 
-	free_io_pgtable_ops(smmu_domain->pgtbl_ops);
+	pt_iommu_deinit(&smmu_domain->armv8pt.iommu);
 
 	/* Free the ASID or VMID */
 	if (smmu_domain->stage == ARM_SMMU_DOMAIN_S1) {
