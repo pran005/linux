@@ -91,6 +91,22 @@ static void vfio_pci_dma_buf_release(struct dma_buf *dmabuf)
 	kfree(priv);
 }
 
+static int vfio_pci_dma_buf_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma)
+{
+	struct vfio_pci_dma_buf *priv = dmabuf->priv;
+
+	if (priv->revoked)
+		return -ENODEV;
+	if ((vma->vm_flags & VM_SHARED) == 0)
+		return -EINVAL;
+
+	vma->vm_ops = &vfio_pci_mmap_ops;
+	vma->vm_private_data = priv;
+	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+
+	return 0;
+}
+
 static const struct dma_buf_ops vfio_pci_dmabuf_ops = {
 #ifdef CONFIG_VFIO_PCI_DMABUF
 	.attach = vfio_pci_dma_buf_attach,
@@ -98,6 +114,7 @@ static const struct dma_buf_ops vfio_pci_dmabuf_ops = {
 	.map_dma_buf = vfio_pci_dma_buf_map,
 	.unmap_dma_buf = vfio_pci_dma_buf_unmap,
 	.release = vfio_pci_dma_buf_release,
+	.mmap = vfio_pci_dma_buf_mmap,
 };
 
 int vfio_pci_dma_buf_find_pfn(struct vfio_pci_dma_buf *vpdmabuf,
