@@ -143,7 +143,9 @@ struct vfio_pci_core_device {
 	struct notifier_block	nb;
 	struct rw_semaphore	memory_lock;
 	struct list_head	dmabufs;
-};
+	/* Bitmask of BARs with struct page backing */
+	u8			p2p_page_backed_bars;
+	};
 
 enum vfio_pci_io_width {
 	VFIO_PCI_IO_WIDTH_1 = 1,

@@ -5,6 +5,7 @@
 #include <linux/pci-p2pdma.h>
 #include <linux/dma-resv.h>
 #include <uapi/linux/dma-buf.h>
+#include <linux/memremap.h>
 
 #include "vfio_pci_priv.h"
 
@@ -42,21 +43,75 @@ vfio_pci_dma_buf_map(struct dma_buf_attachment *attachment,
 		     enum dma_data_direction dir)
 {
 	struct vfio_pci_dma_buf *priv = attachment->dmabuf->priv;
-	struct sg_table *ret;
+	struct sg_table *sgt;
+	struct scatterlist *sg;
+	int i, ret;
 
 	dma_resv_assert_held(priv->dmabuf->resv);
 
 	if (priv->status != VFIO_PCI_DMABUF_OK)
 		return ERR_PTR(-ENODEV);
 
-	ret = dma_buf_phys_vec_to_sgt(attachment, priv->provider,
-				      priv->phys_vec, priv->nr_ranges,
-				      priv->size, dir);
-	if (IS_ERR(ret))
-		return ret;
+	if (!priv->has_struct_pages) {
+		sgt = dma_buf_phys_vec_to_sgt(attachment, priv->provider,
+					      priv->phys_vec, priv->nr_ranges,
+					      priv->size, dir);
+		if (IS_ERR(sgt))
+			return sgt;
+
+		kref_get(&priv->kref);
+		return sgt;
+	}
+
+	/*
+	 * Wire up stuff if we got struct pages
+	 * Allocate and populate the SGL manually, we must
+	 */
+	sgt = kzalloc(sizeof(*sgt), GFP_KERNEL);
+	if (!sgt)
+		return ERR_PTR(-ENOMEM);
+
+	/* Use __GFP_ZERO so we can safely iterate to cleanup partial mappings */
+	ret = sg_alloc_table(sgt, priv->nr_ranges, GFP_KERNEL | __GFP_ZERO);
+	if (ret) {
+		kfree(sgt);
+		return ERR_PTR(ret);
+	}
+
+	sg = sgt->sgl;
+	for (i = 0; i < priv->nr_ranges; i++) {
+		dma_addr_t phys = priv->phys_vec[i].paddr;
+		size_t len = priv->phys_vec[i].len;
+		struct page *page = pfn_to_page(phys >> PAGE_SHIFT);
+
+		/* Populate the struct page */
+		sg_set_page(sg, page, len, 0);
+
+		/* Map using the resource API, skipping CPU sync */
+		sg_dma_address(sg) = dma_map_resource(attachment->dev, phys, len,
+						      dir, DMA_ATTR_SKIP_CPU_SYNC);
+
+		if (dma_mapping_error(attachment->dev, sg_dma_address(sg)))
+			goto err_unmap;
+
+		sg_dma_len(sg) = len;
+		sg = sg_next(sg);
+	}
 
 	kref_get(&priv->kref);
-	return ret;
+	return sgt;
+
+err_unmap:
+	/* Cleanup manually, we must */
+	for_each_sgtable_sg(sgt, sg, i) {
+		if (sg_dma_len(sg))
+			dma_unmap_resource(attachment->dev, sg_dma_address(sg),
+					   sg_dma_len(sg), dir,
+					   DMA_ATTR_SKIP_CPU_SYNC);
+	}
+	sg_free_table(sgt);
+	kfree(sgt);
+	return ERR_PTR(-EIO);
 }
 
 static void vfio_pci_dma_buf_unmap(struct dma_buf_attachment *attachment,
@@ -64,10 +119,25 @@ static void vfio_pci_dma_buf_unmap(struct dma_buf_attachment *attachment,
 				   enum dma_data_direction dir)
 {
 	struct vfio_pci_dma_buf *priv = attachment->dmabuf->priv;
+	struct scatterlist *sg;
+	int i;
 
 	dma_resv_assert_held(priv->dmabuf->resv);
 
-	dma_buf_free_sgt(attachment, sgt, dir);
+	if (!priv->has_struct_pages) {
+		dma_buf_free_sgt(attachment, sgt, dir);
+		kref_put(&priv->kref, vfio_pci_dma_buf_done);
+		return;
+	}
+
+	/* Cleanup manually, we must */
+	for_each_sgtable_sg(sgt, sg, i) {
+		dma_unmap_resource(attachment->dev, sg_dma_address(sg),
+				   sg_dma_len(sg), dir, DMA_ATTR_SKIP_CPU_SYNC);
+	}
+
+	sg_free_table(sgt);
+	kfree(sgt);
 	kref_put(&priv->kref, vfio_pci_dma_buf_done);
 }
 
@@ -85,6 +155,19 @@ static void vfio_pci_dma_buf_release(struct dma_buf *dmabuf)
 		up_write(&priv->vdev->memory_lock);
 		vfio_device_put_registration(&priv->vdev->vdev);
 	}
+
+	if (priv->has_struct_pages) {
+		unsigned int i;
+
+		for (i = 0; i < priv->nr_ranges; i++) {
+			unsigned long pfn = priv->phys_vec[i].paddr >> PAGE_SHIFT;
+			unsigned long npgs = priv->phys_vec[i].len >> PAGE_SHIFT;
+
+			while (npgs--)
+				set_page_count(pfn_to_page(pfn++), 0);
+		}
+	}
+
 	if (priv->vfile)
 		fput(priv->vfile);
 	kfree(priv->phys_vec);
@@ -99,6 +182,33 @@ static int vfio_pci_dma_buf_mmap(struct dma_buf *dmabuf, struct vm_area_struct *
 		return -ENODEV;
 	if ((vma->vm_flags & VM_SHARED) == 0)
 		return -EINVAL;
+
+	if (priv->has_struct_pages) {
+		unsigned long addr;
+		unsigned long pfn;
+
+		if (vma_pages(vma) > (priv->size >> PAGE_SHIFT))
+			return -EINVAL;
+
+		/* TODO: Simplified for contiguous BARs, see the real use-case */
+		if (priv->nr_ranges != 1)
+			return -EOPNOTSUPP;
+
+		pfn = priv->phys_vec[0].paddr >> PAGE_SHIFT;
+
+		vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+
+		/* VM_MIXEDMAP is required for ZONE_DEVICE pages */
+		vm_flags_set(vma, VM_MIXEDMAP | VM_DONTEXPAND | VM_DONTDUMP);
+
+		for (addr = vma->vm_start; addr < vma->vm_end; addr += PAGE_SIZE) {
+			int ret = vm_insert_page(vma, addr, pfn_to_page(pfn++));
+			if (ret) {
+				pr_err("vfio_p2p: vm_insert_page failed at addr %lx with %d\n", addr, ret);
+				return ret;
+			}
+		}
+	}
 
 	vma->vm_ops = &vfio_pci_mmap_ops;
 	vma->vm_private_data = priv;
@@ -375,6 +485,35 @@ int vfio_pci_core_get_dmabuf_phys(struct vfio_pci_core_device *vdev,
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_get_dmabuf_phys);
 
+static int vfio_pci_dma_buf_alloc_struct_pages(struct vfio_pci_core_device *vdev,
+					      struct vfio_device_feature_dma_buf *dma_buf)
+{
+	struct pci_dev *pdev = vdev->pdev;
+	u32 bar_index = dma_buf->region_index;
+	int ret;
+
+	/* Check if we have a page already for the bar */
+	if (vdev->p2p_page_backed_bars & (1 << dma_buf->region_index))
+		return 0;
+
+	/*
+	 * Allocate vmemmap (struct pages) for the ENTIRE BAR.
+	 * Passing size=0, offset=0 tells pci_p2pdma_add_resource to claim the
+	 * whole available resource.
+	 */
+	ret = pci_p2pdma_add_resource(pdev, bar_index, 0, 0);
+	if (ret) {
+		/* If it returns -EEXIST, it means the resource was already added */
+		if (ret != -EEXIST)
+			return ret;
+	}
+
+	/* Mark this BAR as backed so we don't try to allocate it again */
+	vdev->p2p_page_backed_bars |= (1 << bar_index);
+
+	return 0;
+}
+
 static int validate_dmabuf_input(struct vfio_device_feature_dma_buf *dma_buf,
 				 struct vfio_region_dma_range *dma_ranges,
 				 size_t *lengthp)
@@ -426,7 +565,8 @@ int vfio_pci_core_feature_dma_buf(struct vfio_pci_core_device *vdev, u32 flags,
 	if (copy_from_user(&get_dma_buf, arg, sizeof(get_dma_buf)))
 		return -EFAULT;
 
-	if (!get_dma_buf.nr_ranges || get_dma_buf.flags)
+	if (!get_dma_buf.nr_ranges ||
+	    (get_dma_buf.flags & ~VFIO_DMA_BUF_FLAG_ALLOC_STRUCT_PAGES))
 		return -EINVAL;
 
 	/*
@@ -446,6 +586,12 @@ int vfio_pci_core_feature_dma_buf(struct vfio_pci_core_device *vdev, u32 flags,
 	if (ret)
 		goto err_free_ranges;
 
+	if (get_dma_buf.flags & VFIO_DMA_BUF_FLAG_ALLOC_STRUCT_PAGES) {
+		ret = vfio_pci_dma_buf_alloc_struct_pages(vdev, &get_dma_buf);
+		if (ret)
+			goto err_free_ranges;
+	}
+
 	priv = kzalloc_obj(*priv);
 	if (!priv) {
 		ret = -ENOMEM;
@@ -456,17 +602,33 @@ int vfio_pci_core_feature_dma_buf(struct vfio_pci_core_device *vdev, u32 flags,
 		ret = -ENOMEM;
 		goto err_free_priv;
 	}
-priv->vdev = vdev;
-priv->nr_ranges = get_dma_buf.nr_ranges;
-priv->size = length;
-priv->memattr = VFIO_DEVICE_FEATURE_DMA_BUF_MEMATTR_NC;
-ret = vdev->pci_ops->get_dmabuf_phys(vdev, &priv->provider,
 
+	priv->vdev = vdev;
+	priv->nr_ranges = get_dma_buf.nr_ranges;
+	priv->size = length;
+	priv->memattr = VFIO_DEVICE_FEATURE_DMA_BUF_MEMATTR_NC;
+	if (get_dma_buf.flags & VFIO_DMA_BUF_FLAG_ALLOC_STRUCT_PAGES)
+		priv->has_struct_pages = 1;
+
+	ret = vdev->pci_ops->get_dmabuf_phys(vdev, &priv->provider,
 					     get_dma_buf.region_index,
 					     priv->phys_vec, dma_ranges,
 					     priv->nr_ranges);
 	if (ret)
 		goto err_free_phys;
+
+	/* Claim page refcounts to ensure vm_insert_map works during mmap */
+	if (priv->has_struct_pages) {
+		unsigned int i;
+
+		for (i = 0; i < priv->nr_ranges; i++) {
+			unsigned long pfn = priv->phys_vec[i].paddr >> PAGE_SHIFT;
+			unsigned long npgs = priv->phys_vec[i].len >> PAGE_SHIFT;
+
+			while (npgs--)
+				set_page_count(pfn_to_page(pfn++), 1);
+		}
+	}
 
 	kfree(dma_ranges);
 	dma_ranges = NULL;
@@ -725,71 +887,69 @@ int vfio_pci_dma_buf_revoke(struct vfio_pci_core_device *vdev, int dmabuf_fd)
 
  out_put_buf:
 	dma_buf_put(dmabuf);
-return ret;
+	return ret;
 }
 
 int vfio_pci_core_feature_dma_buf_memattr(
-struct vfio_pci_core_device *vdev, u32 flags,
-struct vfio_device_feature_dma_buf_memattr __user *arg,
-size_t argsz)
+	struct vfio_pci_core_device *vdev, u32 flags,
+	struct vfio_device_feature_dma_buf_memattr __user *arg,
+	size_t argsz)
 {
-struct vfio_device_feature_dma_buf_memattr db_attr;
-struct vfio_pci_dma_buf *priv;
-struct dma_buf *dmabuf;
-int ret;
+	struct vfio_device_feature_dma_buf_memattr db_attr;
+	struct vfio_pci_dma_buf *priv;
+	struct dma_buf *dmabuf;
+	int ret;
 
-if (!vdev->pci_ops || !vdev->pci_ops->get_dmabuf_phys)
-	return -EOPNOTSUPP;
+	if (!vdev->pci_ops || !vdev->pci_ops->get_dmabuf_phys)
+		return -EOPNOTSUPP;
 
-ret = vfio_check_feature(flags, argsz,
-			 VFIO_DEVICE_FEATURE_GET |
-			 VFIO_DEVICE_FEATURE_SET,
-			 sizeof(db_attr));
-if (ret != 1)
-	return ret;
+	ret = vfio_check_feature(flags, argsz,
+				 VFIO_DEVICE_FEATURE_GET |
+				 VFIO_DEVICE_FEATURE_SET,
+				 sizeof(db_attr));
+	if (ret != 1)
+		return ret;
 
-if (copy_from_user(&db_attr, arg, sizeof(db_attr)))
-	return -EFAULT;
+	if (copy_from_user(&db_attr, arg, sizeof(db_attr)))
+		return -EFAULT;
 
-dmabuf = dma_buf_get(db_attr.dmabuf_fd);
-if (IS_ERR(dmabuf))
-	return PTR_ERR(dmabuf);
+	dmabuf = dma_buf_get(db_attr.dmabuf_fd);
+	if (IS_ERR(dmabuf))
+		return PTR_ERR(dmabuf);
 
-/* Verify DMABUF: see comments in vfio_pci_dma_buf_revoke() */
-priv = dmabuf->priv;
-if (dmabuf->ops != &vfio_pci_dmabuf_ops || priv->vdev != vdev) {
-	ret = -ENODEV;
-	goto out_put_buf;
-}
-
-ret = 0;
-scoped_guard(rwsem_write, &vdev->memory_lock) {
-	uint32_t old_attr = priv->memattr;
-
-	if (flags & VFIO_DEVICE_FEATURE_SET) {
-		switch(db_attr.memattr) {
-		case VFIO_DEVICE_FEATURE_DMA_BUF_MEMATTR_NC:
-		case VFIO_DEVICE_FEATURE_DMA_BUF_MEMATTR_WC:
-			priv->memattr = db_attr.memattr;
-			break;
-
-		default:
-			ret = -EOPNOTSUPP;
-		}
+	/* Verify DMABUF: see comments in vfio_pci_dma_buf_revoke() */
+	priv = dmabuf->priv;
+	if (dmabuf->ops != &vfio_pci_dmabuf_ops || priv->vdev != vdev) {
+		ret = -ENODEV;
+		goto out_put_buf;
 	}
-	db_attr.memattr = old_attr;
-}
 
-if (!ret && (flags & VFIO_DEVICE_FEATURE_GET)) {
-	if (copy_to_user(arg, &db_attr, sizeof(db_attr)))
-		ret = -EFAULT;
-}
+	ret = 0;
+	scoped_guard(rwsem_write, &vdev->memory_lock) {
+		uint32_t old_attr = priv->memattr;
 
-out_put_buf:
-dma_buf_put(dmabuf);
+		if (flags & VFIO_DEVICE_FEATURE_SET) {
+			switch(db_attr.memattr) {
+			case VFIO_DEVICE_FEATURE_DMA_BUF_MEMATTR_NC:
+			case VFIO_DEVICE_FEATURE_DMA_BUF_MEMATTR_WC:
+				priv->memattr = db_attr.memattr;
+				break;
 
-return ret;
+			default:
+				ret = -EOPNOTSUPP;
+			}
+		}
+		db_attr.memattr = old_attr;
+	}
 
+	if (!ret && (flags & VFIO_DEVICE_FEATURE_GET)) {
+		if (copy_to_user(arg, &db_attr, sizeof(db_attr)))
+			ret = -EFAULT;
+	}
+
+ out_put_buf:
+	dma_buf_put(dmabuf);
+
+	return ret;
 }
 #endif /* CONFIG_VFIO_PCI_DMABUF */
-

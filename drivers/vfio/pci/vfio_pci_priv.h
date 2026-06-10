@@ -43,7 +43,8 @@ struct vfio_pci_dma_buf {
 	unsigned long vma_pgoff_adjust;
 	u32 memattr;
 	enum vfio_pci_dma_buf_status status;
-};
+	u8 has_struct_pages : 1;
+	};
 
 bool vfio_pci_intx_mask(struct vfio_pci_core_device *vdev);
 void vfio_pci_intx_unmask(struct vfio_pci_core_device *vdev);

@@ -1540,13 +1540,19 @@ struct vfio_device_feature_bus_master {
  * Return: The fd number on success, -1 and errno is set on failure.
  */
 #define VFIO_DEVICE_FEATURE_DMA_BUF 11
-
 struct vfio_region_dma_range {
 	__u64 offset;
 	__u64 length;
 };
 
+/*
+ * Request the kernel to allocate valid struct pages (ZONE_DEVICE) for the
+ * exported range.
+ */
+#define VFIO_DMA_BUF_FLAG_ALLOC_STRUCT_PAGES  (1 << 1)
+
 struct vfio_device_feature_dma_buf {
+
 	__u32	region_index;
 	__u32	open_flags;
 	__u32   flags;
