@@ -1301,6 +1301,8 @@ static inline int iopf_for_domain_replace(struct iommu_domain *new,
 #ifdef CONFIG_IOMMU_LIVEUPDATE
 int intel_iommu_preserve_device(struct device *dev,
 				struct iommu_device_ser *device_ser);
+void intel_iommu_unpreserve_device(struct device *dev,
+				   struct iommu_device_ser *device_ser);
 int intel_iommu_preserve(struct iommu_device *iommu,
 			 struct iommu_hw_ser *iommu_ser);
 void intel_iommu_unpreserve(struct iommu_device *iommu,
@@ -1308,11 +1310,19 @@ void intel_iommu_unpreserve(struct iommu_device *iommu,
 void clear_unpreserved_context_entries(struct intel_iommu *iommu);
 void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 					       struct iommu_hw_ser *iommu_ser);
+int intel_iommu_domain_reattach_iommu(struct dmar_domain *domain,
+				      struct intel_iommu *iommu,
+				      struct iommu_device_ser *device_ser);
 #else
 static inline int intel_iommu_preserve_device(struct device *dev,
 					      struct iommu_device_ser *device_ser)
 {
 	return -EOPNOTSUPP;
+}
+
+static inline void intel_iommu_unpreserve_device(struct device *dev,
+						 struct iommu_device_ser *device_ser)
+{
 }
 
 static inline int intel_iommu_preserve(struct iommu_device *iommu,
@@ -1333,6 +1343,13 @@ static inline void clear_unpreserved_context_entries(struct intel_iommu *iommu)
 static inline void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 							     struct iommu_hw_ser *iommu_ser)
 {
+}
+
+static inline int intel_iommu_domain_reattach_iommu(struct dmar_domain *domain,
+						    struct intel_iommu *iommu,
+						    struct iommu_device_ser *device_ser)
+{
+	return -EOPNOTSUPP;
 }
 #endif
 
