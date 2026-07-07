@@ -81,6 +81,7 @@
 enum iommu_type_ser {
 	IOMMU_INVALID,
 	IOMMU_INTEL,
+	IOMMU_ARM_SMMUV3,
 };
 
 #define IOMMU_SER_FLAG_DELETED	(1 << 0)
@@ -138,6 +139,23 @@ struct iommu_device_intel_ser {
 } __packed;
 
 /**
+ * struct iommu_master_smmuv3_ser - SMMUv3 specific device state
+ * @l1_cdtab_lu_state: Live update state token for the linear/L1 CD table
+ * @num_l2_cdtables: Number of active L2 CD tables preserved
+ * @l2_cdtab_lu_states_phys: Physical pointer to an array of u64 LU state tokens
+ *                           for the active L2 CD tables (0 if linear)
+ *
+ * Note: Currently unused for Stage-2 Live Update. Reserved for future
+ * preservation of Stage-1 per-device Context Descriptor (CD) tables.
+ */
+struct iommu_master_smmuv3_ser {
+	u64 l1_cdtab_lu_state;
+	u32 num_l2_cdtables;
+	u32 padding;
+	u64 l2_cdtab_lu_states_phys;
+} __packed;
+
+/**
  * struct iommu_device_ser - Serialized state of a device
  * @hdr: Common object header
  * @devid: Device ID
@@ -151,6 +169,7 @@ struct iommu_device_ser {
 	struct iommu_dev_map_ser domain_iommu_ser;
 	union {
 		struct iommu_device_intel_ser intel;
+		struct iommu_master_smmuv3_ser smmuv3;
 	};
 } __packed;
 
@@ -171,6 +190,26 @@ struct iommu_intel_ser {
 };
 
 /**
+ * struct iommu_smmuv3_hw_ser - SMMUv3 specific hardware state
+ * @phys_addr: Physical address of the SMMU register base
+ * @strtab_base: STRTAB_BASE register value
+ * @strtab_base_cfg: STRTAB_BASE_CFG register value
+ * @l1_strtab_lu_state: Live update state token for the linear table OR the L1 table
+ * @num_l2_tables: Number of active L2 tables preserved
+ * @l2_strtab_lu_states_phys: Physical pointer to an array of u64 LU state tokens
+ *                            for the active L2 tables (0 if linear)
+ */
+struct iommu_smmuv3_hw_ser {
+	u64 phys_addr;
+	u64 strtab_base;
+	u64 strtab_base_cfg;
+	u64 l1_strtab_lu_state;
+	u32 num_l2_tables;
+	u32 padding;
+	u64 l2_strtab_lu_states_phys;
+} __packed;
+
+/**
  * struct iommu_hw_ser - Serialized state of an IOMMU instance
  * @hdr: Common object header
  * @token: Unique token for the IOMMU
@@ -183,6 +222,7 @@ struct iommu_hw_ser {
 	u64 type;
 	union {
 		struct iommu_intel_ser intel;
+		struct iommu_smmuv3_hw_ser smmuv3;
 	};
 } __packed;
 
