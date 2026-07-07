@@ -952,6 +952,7 @@ struct arm_smmu_device {
 
 	void __iomem			*base;
 	void __iomem			*page1;
+	phys_addr_t			base_phys;
 
 #define ARM_SMMU_FEAT_2_LVL_STRTAB	(1 << 0)
 #define ARM_SMMU_FEAT_2_LVL_CDTAB	(1 << 1)
@@ -1078,6 +1079,8 @@ struct arm_smmu_master {
 	bool				ste_ats_enabled : 1;
 	bool				stall_enabled;
 	bool				ats_always_on;
+	/* Preserved for a KHO Live Update */
+	bool				preserved;
 	unsigned int			ssid_bits;
 	unsigned int			iopf_refcount;
 };
@@ -1195,6 +1198,17 @@ to_smmu_nested_domain(struct iommu_domain *dom)
 extern struct mutex arm_smmu_asid_lock;
 
 struct arm_smmu_domain *arm_smmu_domain_alloc(void);
+
+#ifdef CONFIG_IOMMU_LIVEUPDATE
+int arm_smmu_preserve_device(struct device *dev,
+			     struct iommu_device_ser *device_ser);
+int arm_smmu_preserve(struct iommu_device *iommu,
+		      struct iommu_hw_ser *iommu_ser);
+void arm_smmu_unpreserve_device(struct device *dev,
+				struct iommu_device_ser *device_ser);
+void arm_smmu_unpreserve(struct iommu_device *iommu,
+			 struct iommu_hw_ser *iommu_ser);
+#endif
 
 static inline void arm_smmu_domain_free(struct arm_smmu_domain *smmu_domain)
 {

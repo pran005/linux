@@ -4548,6 +4548,12 @@ static const struct iommu_ops arm_smmu_ops = {
 	.def_domain_type	= arm_smmu_def_domain_type,
 	.get_viommu_size	= arm_smmu_get_viommu_size,
 	.viommu_init		= arm_vsmmu_init,
+#ifdef CONFIG_IOMMU_LIVEUPDATE
+	.preserve		= arm_smmu_preserve,
+	.unpreserve		= arm_smmu_unpreserve,
+	.preserve_device	= arm_smmu_preserve_device,
+	.unpreserve_device	= arm_smmu_unpreserve_device,
+#endif
 	.user_pasid_table	= 1,
 	.owner			= THIS_MODULE,
 	.default_domain_ops = &(const struct iommu_domain_ops) {
@@ -5807,6 +5813,7 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 	ioaddr = res->start;
+	smmu->base_phys = ioaddr;
 
 	/*
 	 * Don't map the IMPLEMENTATION DEFINED regions, since they may contain
