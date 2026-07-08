@@ -217,6 +217,7 @@ struct page *dma_alloc_from_pool(struct device *dev, size_t size,
 bool dma_free_from_pool(struct device *dev, void *start, size_t size);
 bool dma_free_from_pool_page(struct device *dev, struct page *page, size_t size);
 
+bool dma_is_from_pool(void *start, size_t size);
 int dma_direct_set_offset(struct device *dev, phys_addr_t cpu_start,
 		dma_addr_t dma_start, u64 size);
 

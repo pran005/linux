@@ -422,3 +422,17 @@ bool dma_free_from_pool_page(struct device *dev, struct page *page, size_t size)
 
 	return false;
 }
+
+bool dma_is_from_pool(void *start, size_t size)
+{
+	struct dma_gen_pool *dma_pool = NULL;
+
+	while ((dma_pool = dma_guess_pool(dma_pool, 0))) {
+		if (!gen_pool_has_addr(dma_pool->pool, (unsigned long)start,
+				       size))
+			continue;
+		return true;
+	}
+
+	return false;
+}
