@@ -406,6 +406,9 @@ bool __vfio_pci_memory_enabled(struct vfio_pci_core_device *vdev)
 	struct pci_dev *pdev = vdev->pdev;
 	u16 cmd = le16_to_cpu(*(__le16 *)&vdev->vconfig[PCI_COMMAND]);
 
+	if (vfio_pci_dev_is_frozen(vdev))
+		return false;
+
 	/*
 	 * Memory region cannot be accessed if device power state is D3.
 	 *
