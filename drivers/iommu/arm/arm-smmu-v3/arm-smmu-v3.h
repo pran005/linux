@@ -1183,6 +1183,12 @@ int arm_smmu_preserve_device(struct device *dev,
 			     struct iommu_device_ser *device_ser);
 int arm_smmu_preserve(struct iommu_device *iommu,
 		      struct iommu_hw_ser *iommu_ser);
+int arm_smmu_liveupdate_shutdown(struct arm_smmu_device *smmu);
+#else
+static inline int arm_smmu_liveupdate_shutdown(struct arm_smmu_device *smmu)
+{
+	return -EOPNOTSUPP;
+}
 #endif
 
 static inline void arm_smmu_domain_free(struct arm_smmu_domain *smmu_domain)
@@ -1205,6 +1211,10 @@ void arm_smmu_write_cd_entry(struct arm_smmu_master *master, int ssid,
 int arm_smmu_set_pasid(struct arm_smmu_master *master,
 		       struct arm_smmu_domain *smmu_domain, ioasid_t pasid,
 		       struct arm_smmu_cd *cd, struct iommu_domain *old);
+
+void arm_smmu_write_ste(struct arm_smmu_master *master, u32 sid,
+			struct arm_smmu_ste *ste,
+			const struct arm_smmu_ste *target);
 
 void arm_smmu_domain_tlbi(struct arm_smmu_tlbi *tlbi);
 

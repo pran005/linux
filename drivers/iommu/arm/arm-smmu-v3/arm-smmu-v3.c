@@ -17,6 +17,7 @@
 #include <linux/err.h>
 #include <linux/interrupt.h>
 #include <linux/generic_pt/iommu.h>
+#include <linux/iommu-liveupdate.h>
 #include <linux/iopoll.h>
 
 #include <linux/module.h>
@@ -1778,7 +1779,7 @@ static const struct arm_smmu_entry_writer_ops arm_smmu_ste_writer_ops = {
 	.get_update_safe = arm_smmu_get_ste_update_safe,
 };
 
-static void arm_smmu_write_ste(struct arm_smmu_master *master, u32 sid,
+void arm_smmu_write_ste(struct arm_smmu_master *master, u32 sid,
 			       struct arm_smmu_ste *ste,
 			       const struct arm_smmu_ste *target)
 {
@@ -5580,6 +5581,19 @@ static void arm_smmu_device_shutdown(struct platform_device *pdev)
 {
 	struct arm_smmu_device *smmu = platform_get_drvdata(pdev);
 
+	if (iommu_preserved_state(&smmu->iommu)) {
+		if (!arm_smmu_liveupdate_shutdown(smmu)) {
+			/* TODO: Replace with disable_irqs when merged */
+			arm_smmu_write_reg_sync(smmu, 0, ARM_SMMU_IRQ_CTRL,
+						ARM_SMMU_IRQ_CTRLACK);
+			return;
+		}
+	}
+
+	/*
+	 * Disable the SMMU on standard shutdown/reboot.
+	 * Fallback to this path if the Live Update shutdown failed.
+	 */
 	arm_smmu_device_disable(smmu);
 }
 
