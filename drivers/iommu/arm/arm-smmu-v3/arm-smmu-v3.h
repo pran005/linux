@@ -1209,10 +1209,15 @@ void arm_smmu_unpreserve_device(struct device *dev,
 void arm_smmu_unpreserve(struct iommu_device *iommu,
 			 struct iommu_hw_ser *iommu_ser);
 int arm_smmu_liveupdate_restore_strtab(struct arm_smmu_device *smmu);
+int arm_smmu_liveupdate_restore_cd_tables(struct arm_smmu_master *master);
 #else
 static inline int arm_smmu_liveupdate_restore_strtab(struct arm_smmu_device *smmu)
 {
 	return -ENOENT;
+}
+static inline int arm_smmu_liveupdate_restore_cd_tables(struct arm_smmu_master *master)
+{
+	return 0;
 }
 #endif
 
@@ -1369,6 +1374,7 @@ int arm_smmu_kexec_check_strtab_l1_desc(struct arm_smmu_device *smmu,
 int arm_smmu_kexec_check_ste_cdtab(struct arm_smmu_device *smmu, u64 ste0,
 				   phys_addr_t *cdtab, u32 *s1fmt,
 				   u32 *max_contexts);
+int arm_smmu_kexec_check_cdtab_l1_desc(u64 l1_desc, phys_addr_t *l2_base);
 int arm_smmu_kexec_scan_and_resv_ids(struct arm_smmu_device *smmu);
 void arm_smmu_kexec_unresv_ids(struct arm_smmu_device *smmu);
 #endif /* CONFIG_ARM_SMMU_V3_KEXEC */

@@ -222,6 +222,33 @@ int arm_smmu_kexec_check_ste_cdtab(struct arm_smmu_device *smmu, u64 ste0,
 	return 0;
 }
 
+/**
+ * arm_smmu_kexec_check_cdtab_l1_desc() - Check one CD table L1 descriptor
+ * @l1_desc: L1 descriptor value from the previous kernel's CD table
+ * @l2_base: pointer to return the L2 CD table's physical address
+ *
+ * Return: 1 if the descriptor is unused, 0 if it is valid with @l2_base set, or
+ * -EINVAL if it is malformed
+ */
+int arm_smmu_kexec_check_cdtab_l1_desc(u64 l1_desc, phys_addr_t *l2_base)
+{
+	phys_addr_t base = l1_desc & CTXDESC_L1_DESC_L2PTR_MASK;
+
+	if (!(l1_desc & CTXDESC_L1_DESC_V))
+		return 1;
+
+	/*
+	 * A valid descriptor never carries a null pointer. Also, an L2 table is
+	 * always 64KB-aligned, so an unaligned pointer would make this kernel
+	 * read a different table.
+	 */
+	if (!base || !IS_ALIGNED(base, sizeof(struct arm_smmu_cdtab_l2)))
+		return -EINVAL;
+
+	*l2_base = base;
+	return 0;
+}
+
 static int arm_smmu_kexec_resv_asid(struct arm_smmu_device *smmu, u32 asid)
 {
 	/* A valid CD never has ASID 0; both kernels share the same HW limit */
@@ -310,21 +337,16 @@ static int arm_smmu_kexec_resv_s1_asids(struct arm_smmu_device *smmu, u64 ste0)
 	/* Aliased L2 tables cannot extend the walk; they only repeat a scan */
 	for (i = 0; i < num_l1_ents; i++) {
 		u64 l1_desc = le64_to_cpu(l1tab[i].l2ptr);
-		phys_addr_t l2_base = l1_desc & CTXDESC_L1_DESC_L2PTR_MASK;
 		struct arm_smmu_cdtab_l2 *l2;
+		phys_addr_t l2_base;
 
-		if (!(l1_desc & CTXDESC_L1_DESC_V))
+		ret = arm_smmu_kexec_check_cdtab_l1_desc(l1_desc, &l2_base);
+		if (ret == 1) {
+			ret = 0;
 			continue;
-
-		/*
-		 * A valid descriptor never carries a null pointer. Also, an L2
-		 * table is always 64KB-aligned, so an unaligned pointer would
-		 * make this kernel read a different table.
-		 */
-		if (!l2_base || !IS_ALIGNED(l2_base, sizeof(*l2))) {
-			ret = -EINVAL;
-			break;
 		}
+		if (ret)
+			break;
 
 		l2 = memremap(l2_base, num_cds * sizeof(*l2->cds), MEMREMAP_WB);
 		if (!l2) {

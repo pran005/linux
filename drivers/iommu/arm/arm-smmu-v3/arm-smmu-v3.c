@@ -17,6 +17,7 @@
 #include <linux/err.h>
 #include <linux/interrupt.h>
 #include <linux/generic_pt/iommu.h>
+#include <linux/iommu-liveupdate.h>
 #include <linux/iopoll.h>
 #include <linux/jump_label.h>
 
@@ -1722,6 +1723,14 @@ static int arm_smmu_alloc_cd_tables(struct arm_smmu_master *master)
 	size_t max_contexts;
 	struct arm_smmu_device *smmu = master->smmu;
 	struct arm_smmu_ctx_desc_cfg *cd_table = &master->cd_table;
+
+	if (dev_iommu_restored_state(master->dev)) {
+		ret = arm_smmu_liveupdate_restore_cd_tables(master);
+		if (ret)
+			return ret;
+		if (arm_smmu_cdtab_allocated(cd_table))
+			return 0;
+	}
 
 	cd_table->s1cdmax = master->ssid_bits;
 
