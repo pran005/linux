@@ -1185,12 +1185,17 @@ int arm_smmu_preserve(struct iommu_device *iommu,
 		      struct iommu_hw_ser *iommu_ser);
 int arm_smmu_liveupdate_shutdown(struct arm_smmu_device *smmu);
 int arm_smmu_liveupdate_restore_strtab(struct arm_smmu_device *smmu);
+int arm_smmu_liveupdate_restore_cd_tables(struct arm_smmu_master *master);
 #else
 static inline int arm_smmu_liveupdate_shutdown(struct arm_smmu_device *smmu)
 {
 	return -EOPNOTSUPP;
 }
 static inline int arm_smmu_liveupdate_restore_strtab(struct arm_smmu_device *smmu)
+{
+	return 0;
+}
+static inline int arm_smmu_liveupdate_restore_cd_tables(struct arm_smmu_master *master)
 {
 	return 0;
 }

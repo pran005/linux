@@ -504,4 +504,85 @@ int arm_smmu_liveupdate_restore_strtab(struct arm_smmu_device *smmu)
 	return 0;
 }
 
+int arm_smmu_liveupdate_restore_cd_tables(struct arm_smmu_master *master)
+{
+	struct arm_smmu_device *smmu = master->smmu;
+	struct arm_smmu_ctx_desc_cfg *cd_table = &master->cd_table;
+	struct iommu_device_ser *dev_ser = dev_iommu_restored_state(master->dev);
+	struct arm_smmu_ste *ste;
+	u64 val;
+	phys_addr_t l1_phys;
+	u32 l1size, i, num_l2;
+	u64 *l2_states;
+
+	if (!dev_ser)
+		return 0;
+
+	/* Extract CD Table address from the active STEs */
+	ste = arm_smmu_get_step_for_sid(smmu, master->streams[0].id);
+	val = le64_to_cpu(ste->data[0]);
+
+	/* If the STE isn't S1_TRANS, no CD table exists */
+	if (!(val & STRTAB_STE_0_V) || 
+	    FIELD_GET(STRTAB_STE_0_CFG, val) != STRTAB_STE_0_CFG_S1_TRANS)
+		return 0;
+
+	l1_phys = val & STRTAB_STE_0_S1CTXPTR_MASK;
+
+	/* Determine format from STE */
+	if (FIELD_GET(STRTAB_STE_0_S1FMT, val) == STRTAB_STE_0_S1FMT_LINEAR) {
+		u32 max_contexts = 1 << FIELD_GET(STRTAB_STE_0_S1CDMAX, val);
+		l1size = max_contexts * sizeof(struct arm_smmu_cd);
+		
+		cd_table->linear.table = dmam_restore_allocation_attrs(smmu->dev, l1size,
+								       &cd_table->cdtab_dma, GFP_KERNEL, 0,
+								       dev_ser->smmuv3.l1_cdtab_lu_state);
+		return cd_table->linear.table ? 0 : -ENOMEM;
+	}
+
+	/* Restore L1 CD Table */
+	cd_table->s1fmt = STRTAB_STE_0_S1FMT_64K_L2;
+	cd_table->l2.num_l1_ents = DIV_ROUND_UP(1 << FIELD_GET(STRTAB_STE_0_S1CDMAX, val), CTXDESC_L2_ENTRIES);
+	l1size = cd_table->l2.num_l1_ents * sizeof(struct arm_smmu_cdtab_l1);
+
+	cd_table->l2.l1tab = dmam_restore_allocation_attrs(smmu->dev, l1size,
+							   &cd_table->cdtab_dma, GFP_KERNEL, 0,
+							   dev_ser->smmuv3.l1_cdtab_lu_state);
+	if (!cd_table->l2.l1tab)
+		return -ENOMEM;
+
+	cd_table->l2.l2ptrs = devm_kcalloc(smmu->dev, cd_table->l2.num_l1_ents,
+					   sizeof(*cd_table->l2.l2ptrs), GFP_KERNEL);
+	if (!cd_table->l2.l2ptrs)
+		return -ENOMEM;
+
+	num_l2 = dev_ser->smmuv3.num_l2_cdtables;
+	if (!num_l2)
+		return 0;
+
+	l2_states = phys_to_virt(dev_ser->smmuv3.l2_cdtab_lu_states_phys);
+	num_l2 = 0;
+
+	/* Walk the L1 CD table and restore active L2s */
+	for (i = 0; i < cd_table->l2.num_l1_ents; i++) {
+		struct arm_smmu_cdtab_l1 *desc = &cd_table->l2.l1tab[i];
+		dma_addr_t l2_dma;
+		u64 l1_val = le64_to_cpu(desc->l2ptr);
+
+		if (!(l1_val & CTXDESC_L1_DESC_V))
+			continue;
+
+		l2_dma = l1_val & CTXDESC_L1_DESC_L2PTR_MASK;
+		cd_table->l2.l2ptrs[i] = dmam_restore_allocation_attrs(smmu->dev,
+								       sizeof(struct arm_smmu_cdtab_l2),
+								       &l2_dma, GFP_KERNEL, 0,
+								       l2_states[num_l2++]);
+		if (!cd_table->l2.l2ptrs[i])
+			return -ENOMEM;
+	}
+
+	kho_restore_free(l2_states);
+	return 0;
+}
+
 #endif
