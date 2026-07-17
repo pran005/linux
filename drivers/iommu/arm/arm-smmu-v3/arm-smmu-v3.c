@@ -4549,12 +4549,19 @@ static int arm_smmu_init_strtab(struct arm_smmu_device *smmu)
 {
 	int ret;
 
-	if (smmu->features & ARM_SMMU_FEAT_2_LVL_STRTAB)
+	if (iommu_preserved_state(&smmu->iommu)) {
+		ret = arm_smmu_liveupdate_restore_strtab(smmu);
+		if (ret)
+			return ret;
+	} else if (smmu->features & ARM_SMMU_FEAT_2_LVL_STRTAB) {
 		ret = arm_smmu_init_strtab_2lvl(smmu);
-	else
+		if (ret)
+			return ret;
+	} else {
 		ret = arm_smmu_init_strtab_linear(smmu);
-	if (ret)
-		return ret;
+		if (ret)
+			return ret;
+	}
 
 	ida_init(&smmu->vmid_map);
 

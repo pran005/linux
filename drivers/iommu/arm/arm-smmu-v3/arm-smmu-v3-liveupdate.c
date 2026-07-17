@@ -415,4 +415,93 @@ int arm_smmu_liveupdate_shutdown(struct arm_smmu_device *smmu)
 	return 0;
 }
 
+static int arm_smmu_liveupdate_restore_strtab_2lvl(struct arm_smmu_device *smmu)
+{
+	struct arm_smmu_strtab_cfg *cfg = &smmu->strtab_cfg;
+	struct iommu_hw_ser *iommu_ser = iommu_preserved_state(&smmu->iommu);
+	u64 reg;
+	phys_addr_t l1_phys;
+	u32 l1size;
+	u64 *l2_states;
+	int i;
+	u32 num_l2 = iommu_ser->smmuv3.num_l2_tables;
+
+	/* Extract L1 physical address directly from active hardware */
+	reg = readq_relaxed(smmu->base + ARM_SMMU_STRTAB_BASE);
+	l1_phys = reg & STRTAB_BASE_ADDR_MASK;
+	
+	l1size = cfg->l2.num_l1_ents * sizeof(struct arm_smmu_strtab_l1);
+
+	/* Restore the L1 table */
+	cfg->l2.l1tab = dmam_restore_allocation_attrs(smmu->dev, l1size,
+						      &cfg->l2.l1_dma, GFP_KERNEL, 0,
+						      iommu_ser->smmuv3.l1_strtab_lu_state);
+	if (!cfg->l2.l1tab) {
+		dev_err(smmu->dev, "KHO: Failed to restore L1 Stream Table\n");
+		return -ENOMEM;
+	}
+
+	cfg->l2.l2ptrs = devm_kcalloc(smmu->dev, cfg->l2.num_l1_ents,
+				      sizeof(*cfg->l2.l2ptrs), GFP_KERNEL);
+	if (!cfg->l2.l2ptrs)
+		return -ENOMEM;
+
+	if (!num_l2)
+		return 0;
+
+	l2_states = phys_to_virt(iommu_ser->smmuv3.l2_strtab_lu_states_phys);
+	num_l2 = 0;
+
+	/* Restore active L2 tables based on preserved state array */
+	for (i = 0; i < cfg->l2.num_l1_ents; i++) {
+		struct arm_smmu_strtab_l1 *desc = &cfg->l2.l1tab[i];
+		dma_addr_t l2_dma;
+		u64 val = le64_to_cpu(desc->l2ptr);
+
+		/* Skip L1 descriptors wiped by the outgoing .shutdown hook */
+		if (!FIELD_GET(STRTAB_L1_DESC_SPAN, val))
+			continue;
+
+		l2_dma = val & STRTAB_L1_DESC_L2PTR_MASK;
+		cfg->l2.l2ptrs[i] = dmam_restore_allocation_attrs(smmu->dev,
+								  sizeof(struct arm_smmu_strtab_l2),
+								  &l2_dma, GFP_KERNEL, 0,
+								  l2_states[num_l2++]);
+		if (!cfg->l2.l2ptrs[i]) {
+			dev_err(smmu->dev, "KHO: Failed to restore L2 table at idx %d\n", i);
+			return -ENOMEM;
+		}
+	}
+
+	kho_restore_free(l2_states);
+	dev_info(smmu->dev, "KHO: Successfully restored 2-level Stream Table\n");
+	return 0;
+}
+
+int arm_smmu_liveupdate_restore_strtab(struct arm_smmu_device *smmu)
+{
+	struct arm_smmu_strtab_cfg *cfg = &smmu->strtab_cfg;
+	struct iommu_hw_ser *iommu_ser;
+
+	iommu_ser = iommu_preserved_state(&smmu->iommu);
+	if (!iommu_ser)
+		return 0;
+
+	if (smmu->features & ARM_SMMU_FEAT_2_LVL_STRTAB) {
+		return arm_smmu_liveupdate_restore_strtab_2lvl(smmu);
+	} else {
+		u32 size = (1 << smmu->sid_bits) * sizeof(struct arm_smmu_ste);
+		cfg->linear.table = dmam_restore_allocation_attrs(smmu->dev, size,
+								 &cfg->linear.ste_dma, GFP_KERNEL, 0,
+								 iommu_ser->smmuv3.l1_strtab_lu_state);
+		
+		if (!cfg->linear.table)
+			return -ENOMEM;
+
+		dev_info(smmu->dev, "KHO: Successfully restored linear Stream Table\n");
+	}
+		
+	return 0;
+}
+
 #endif
