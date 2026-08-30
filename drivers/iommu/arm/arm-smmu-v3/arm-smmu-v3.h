@@ -993,6 +993,7 @@ struct arm_smmu_device {
  * invalidated CONT
  */
 #define ARM_SMMU_OPT_FULL_CONT_RANGE_INV (1 << 5)
+#define ARM_SMMU_OPT_KDUMP_ADOPT	(1 << 6)
 	u32				options;
 
 	struct arm_smmu_cmdq		cmdq;
@@ -1330,6 +1331,26 @@ int arm_smmu_kexec_check_strtab_l1_desc(struct arm_smmu_device *smmu,
 					u64 l1_desc, u32 idx,
 					phys_addr_t *l2_base);
 #endif /* CONFIG_ARM_SMMU_V3_KEXEC */
+
+#ifdef CONFIG_CRASH_DUMP
+int arm_smmu_kdump_adopt_strtab(struct arm_smmu_device *smmu);
+int arm_smmu_kdump_adopt_deferred_l2_strtab(struct arm_smmu_device *smmu,
+					    u32 sid, phys_addr_t base, u32 span,
+					    struct arm_smmu_strtab_l2 **l2table);
+#else /* CONFIG_CRASH_DUMP */
+static inline int arm_smmu_kdump_adopt_strtab(struct arm_smmu_device *smmu)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int
+arm_smmu_kdump_adopt_deferred_l2_strtab(struct arm_smmu_device *smmu, u32 sid,
+					phys_addr_t base, u32 span,
+					struct arm_smmu_strtab_l2 **l2table)
+{
+	return -EOPNOTSUPP;
+}
+#endif /* CONFIG_CRASH_DUMP */
 
 struct arm_vsmmu {
 	struct iommufd_viommu core;
