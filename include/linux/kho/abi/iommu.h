@@ -130,12 +130,26 @@ struct iommu_dev_map_ser {
 } __packed;
 
 /**
+ * struct iommu_device_intel_ser - Intel specific state of serialized device
+ * @restored: Whether the device state is restored
+ * @pasid_table: Physical address of pasid table
+ * @max_pasid: Maximum supported pasid
+ */
+struct iommu_device_intel_ser {
+	u8 restored;
+	u8 padding[7];
+	u64 pasid_table;
+	u64 max_pasid;
+} __packed;
+
+/**
  * struct iommu_device_ser - Serialized state of a device
  * @hdr: Common object header
  * @devid: Device ID
  * @pci_domain_nr: PCI domain number
  * @dma_owner_token: Token to identify the DMA owner of this device
  * @domain_iommu_ser: Domain and IOMMU mapping
+ * @intel: Intel specific serialization data
  */
 struct iommu_device_ser {
 	struct iommu_hdr_ser hdr;
@@ -143,6 +157,9 @@ struct iommu_device_ser {
 	u32 pci_domain_nr;
 	u64 dma_owner_token;
 	struct iommu_dev_map_ser domain_iommu_ser;
+	union {
+		struct iommu_device_intel_ser intel;
+	};
 } __packed;
 
 /* There are maximum 256 buses, so maximum 512 context tables */
