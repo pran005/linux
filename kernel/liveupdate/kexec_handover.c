@@ -1238,7 +1238,8 @@ int kho_preserve_page(struct page *page, unsigned int order)
 	if (WARN_ON(kho_scratch_overlap(pfn << PAGE_SHIFT, PAGE_SIZE << order)))
 		return -EINVAL;
 
-	return kho_radix_add_page(tree, pfn, order);
+	return kho_radix_add_key(tree, kho_encode_radix_key(PFN_PHYS(pfn),
+							    order));
 }
 EXPORT_SYMBOL_GPL(kho_preserve_page);
 
@@ -1255,7 +1256,7 @@ void kho_unpreserve_page(struct page *page, unsigned int order)
 	struct kho_radix_tree *tree = &kho_out.radix_tree;
 	const unsigned long pfn = page_to_pfn(page);
 
-	kho_radix_del_page(tree, pfn, order);
+	kho_radix_del_key(tree, kho_encode_radix_key(PFN_PHYS(pfn), order));
 }
 EXPORT_SYMBOL_GPL(kho_unpreserve_page);
 

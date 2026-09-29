@@ -527,7 +527,8 @@ void *dma_direct_restore_allocation(struct device *dev, size_t size,
 		}
 	}
 
-	*dma_handle = phys_to_dma_direct(dev, ser->page_phys);
+	*dma_handle = phys_to_dma_direct(dev, ser->page_phys,
+					 force_dma_unencrypted(dev));
 
 err:
 	WARN_ON(!kho_restore_pages(ser->page_phys,
