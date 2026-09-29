@@ -208,12 +208,14 @@ struct iommu_intel_ser {
  * @l2_strtab_lu_states_phys: Physical pointer to an array of u64 LU state tokens
  *                            indexed by L1 index, 0 for L2 tables that aren't
  *                            preserved (0 if linear)
+ * @evtq_lu_state: Live update state token for the Event queue (0 if not preserved)
  */
 struct iommu_smmuv3_hw_ser {
 	u64 phys_addr;
 	u64 strtab_base_cfg;
 	u64 l1_strtab_lu_state;
 	u64 l2_strtab_lu_states_phys;
+	u64 evtq_lu_state;
 } __packed;
 
 /**

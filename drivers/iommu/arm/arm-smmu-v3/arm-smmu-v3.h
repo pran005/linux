@@ -1214,6 +1214,8 @@ void arm_smmu_unpreserve(struct iommu_device *iommu,
 int arm_smmu_liveupdate_shutdown(struct arm_smmu_device *smmu);
 int arm_smmu_liveupdate_restore_strtab(struct arm_smmu_device *smmu);
 int arm_smmu_liveupdate_restore_cd_tables(struct arm_smmu_master *master);
+int arm_smmu_liveupdate_restore_evtq(struct arm_smmu_device *smmu);
+bool arm_smmu_liveupdate_evtq_is_live(struct arm_smmu_device *smmu);
 int arm_smmu_liveupdate_attach_restored(struct arm_smmu_master *master,
 					struct arm_smmu_domain *smmu_domain);
 #else
@@ -1228,6 +1230,14 @@ static inline int arm_smmu_liveupdate_restore_strtab(struct arm_smmu_device *smm
 static inline int arm_smmu_liveupdate_restore_cd_tables(struct arm_smmu_master *master)
 {
 	return 0;
+}
+static inline int arm_smmu_liveupdate_restore_evtq(struct arm_smmu_device *smmu)
+{
+	return -ENOENT;
+}
+static inline bool arm_smmu_liveupdate_evtq_is_live(struct arm_smmu_device *smmu)
+{
+	return false;
 }
 static inline int
 arm_smmu_liveupdate_attach_restored(struct arm_smmu_master *master,

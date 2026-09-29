@@ -4683,10 +4683,13 @@ static int arm_smmu_init_queues(struct arm_smmu_device *smmu)
 
 	/* evtq */
 	if (smmu->features & ARM_SMMU_FEAT_EVTQ) {
-		ret = arm_smmu_init_one_queue(smmu, &smmu->evtq.q, smmu->page1,
-					      ARM_SMMU_EVTQ_PROD,
-					      ARM_SMMU_EVTQ_CONS,
-					      EVTQ_ENT_DWORDS, "evtq");
+		ret = arm_smmu_liveupdate_restore_evtq(smmu);
+		if (ret == -ENOENT)
+			ret = arm_smmu_init_one_queue(smmu, &smmu->evtq.q,
+						      smmu->page1,
+						      ARM_SMMU_EVTQ_PROD,
+						      ARM_SMMU_EVTQ_CONS,
+						      EVTQ_ENT_DWORDS, "evtq");
 		if (ret)
 			return ret;
 	}
@@ -5080,9 +5083,15 @@ static int arm_smmu_device_reset(struct arm_smmu_device *smmu)
 	 * Same for a Live Update restore.
 	 */
 	if (arm_smmu_strtab_is_live(smmu)) {
+		u32 qens = CR0_CMDQEN | CR0_EVTQEN | CR0_PRIQEN;
+
 		dev_info(smmu->dev, "%s: retaining SMMUEN for in-flight DMA\n",
 			 is_kdump_kernel() ? "kdump" : "live update");
-		enables = reg & ~(CR0_CMDQEN | CR0_EVTQEN | CR0_PRIQEN);
+
+		/* An adopted EVTQ keeps running */
+		if (arm_smmu_liveupdate_evtq_is_live(smmu))
+			qens &= ~CR0_EVTQEN;
+		enables = reg & ~qens;
 		goto reset_queues;
 	}
 
@@ -5173,12 +5182,15 @@ reset_queues:
 
 	/* Event queue */
 	if (smmu->features & ARM_SMMU_FEAT_EVTQ) {
-		writeq_relaxed(smmu->evtq.q.q_base,
-			       smmu->base + ARM_SMMU_EVTQ_BASE);
-		writel_relaxed(smmu->evtq.q.llq.prod,
-			       smmu->page1 + ARM_SMMU_EVTQ_PROD);
-		writel_relaxed(smmu->evtq.q.llq.cons,
-			       smmu->page1 + ARM_SMMU_EVTQ_CONS);
+		/* An adopted EVTQ resumes from its live BASE/PROD/CONS */
+		if (!arm_smmu_liveupdate_evtq_is_live(smmu)) {
+			writeq_relaxed(smmu->evtq.q.q_base,
+				       smmu->base + ARM_SMMU_EVTQ_BASE);
+			writel_relaxed(smmu->evtq.q.llq.prod,
+				       smmu->page1 + ARM_SMMU_EVTQ_PROD);
+			writel_relaxed(smmu->evtq.q.llq.cons,
+				       smmu->page1 + ARM_SMMU_EVTQ_CONS);
+		}
 
 		enables |= CR0_EVTQEN;
 		ret = arm_smmu_write_reg_sync(smmu, enables, ARM_SMMU_CR0,
@@ -5227,6 +5239,11 @@ reset_queues:
 		dev_err(smmu->dev, "failed to setup irqs\n");
 		return ret;
 	}
+
+	/* Handle the events recorded across the Live Update */
+	if (arm_smmu_liveupdate_evtq_is_live(smmu) &&
+	    (smmu->combined_irq || smmu->evtq.q.irq))
+		irq_wake_thread(smmu->combined_irq ?: smmu->evtq.q.irq, smmu);
 
 	/* Enable the SMMU interface */
 	enables |= CR0_SMMUEN;
