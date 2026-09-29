@@ -5,6 +5,7 @@
  */
 
 #include <linux/dma-mapping.h>
+#include <linux/interrupt.h>
 #include <linux/iommu.h>
 #include <linux/iommu-liveupdate.h>
 #include <linux/kexec_handover.h>
@@ -427,6 +428,125 @@ void arm_smmu_unpreserve(struct iommu_device *iommu,
 		arm_smmu_unpreserve_strtab_2lvl(smmu, iommu_ser);
 	else
 		arm_smmu_unpreserve_strtab_linear(smmu, iommu_ser);
+}
+
+static void arm_smmu_liveupdate_clear_l1_std(struct arm_smmu_device *smmu,
+					     unsigned long *l2_active)
+{
+	struct arm_smmu_strtab_cfg *cfg = &smmu->strtab_cfg;
+	int i;
+
+	for (i = 0; i < cfg->l2.num_l1_ents; i++) {
+		if (!cfg->l2.l2ptrs[i] || test_bit(i, l2_active))
+			continue;
+
+		/* Clear L1 STD for unpreserved streams */
+		WRITE_ONCE(cfg->l2.l1tab[i].l2ptr, 0);
+	}
+}
+
+int arm_smmu_liveupdate_shutdown(struct arm_smmu_device *smmu)
+{
+	struct arm_smmu_master *master;
+	struct arm_smmu_stream *stream;
+	struct arm_smmu_strtab_cfg *cfg = &smmu->strtab_cfg;
+	struct rb_node *node;
+	struct arm_smmu_ste abort_ste;
+	struct arm_smmu_cmd cmd_cfgi, cmd_el2, cmd_nsnh;
+	unsigned long *l2_active = NULL;
+	bool is_2lvl = smmu->features & ARM_SMMU_FEAT_2_LVL_STRTAB;
+	u32 cr0;
+	int ret;
+
+	/* Only the incoming kernel unmasks the SMMU interrupts again */
+	if (arm_smmu_disable_irqs(smmu))
+		dev_warn(smmu->dev, "failed to disable irqs\n");
+
+	/* Wait for a running EVTQ handler */
+	if (smmu->combined_irq || smmu->evtq.q.irq)
+		synchronize_irq(smmu->combined_irq ?: smmu->evtq.q.irq);
+
+	if (is_2lvl) {
+		l2_active = bitmap_zalloc(cfg->l2.num_l1_ents, GFP_KERNEL);
+		if (!l2_active) {
+			dev_err(smmu->dev, "OOM: Falling back to hard disable\n");
+			return -ENOMEM;
+		}
+	}
+
+	/* Prepare an abort STE for unpreserved masters */
+	arm_smmu_make_abort_ste(&abort_ste);
+
+	/*
+	 * We do not scrub unpreserved Context Descriptors (CDs) here since:
+	 *
+	 * 1. Each master has its own independently allocated CD table page,
+	 *    i.e. multiple masters never share a CD table.
+	 *
+	 * 2. We explicitly reject preserving any device with active PASIDs in
+	 *    the .preserve_device op. Thus, any preserved master is guaranteed
+	 *    to only be using CD[0].
+	 *
+	 * Therefore, partial preservation within a CD table is not possible,
+	 * and we only need to isolate unpreserved streams within shared
+	 * Stream Tables.
+	 */
+	mutex_lock(&smmu->streams_mutex);
+
+	/* Install the abort STEs for unpreserved masters */
+	for (node = rb_first(&smmu->streams); node; node = rb_next(node)) {
+		stream = rb_entry(node, struct arm_smmu_stream, node);
+		master = stream->master;
+
+		if (master->preserved) {
+			if (is_2lvl)
+				set_bit(arm_smmu_strtab_l1_idx(stream->id), l2_active);
+		} else {
+			arm_smmu_write_ste(master, stream->id,
+				  arm_smmu_get_step_for_sid(smmu, stream->id),
+				  &abort_ste);
+		}
+	}
+
+	/* Invalidate completely unpreserved streams */
+	if (is_2lvl) {
+		arm_smmu_liveupdate_clear_l1_std(smmu, l2_active);
+		bitmap_free(l2_active);
+	}
+
+	mutex_unlock(&smmu->streams_mutex);
+
+	/* Sync hardware caches to observe updated structures */
+	cmd_cfgi = arm_smmu_make_cmd_cfgi_all();
+	arm_smmu_cmdq_issue_cmdlist(smmu, &smmu->cmdq, &cmd_cfgi, 1, true);
+
+	/*
+	 * Aggressively flush all TLBs to ensure no stale entries exist for
+	 * unpreserved streams. The preserved streams will take a minor hit
+	 * re-walking their page tables, but this guarantees safety.
+	 */
+	if (smmu->features & ARM_SMMU_FEAT_HYP) {
+		cmd_el2 = arm_smmu_make_cmd_op(CMDQ_OP_TLBI_EL2_ALL);
+		arm_smmu_cmdq_issue_cmdlist(smmu, &smmu->cmdq, &cmd_el2, 1, true);
+	}
+
+	cmd_nsnh = arm_smmu_make_cmd_op(CMDQ_OP_TLBI_NSNH_ALL);
+	arm_smmu_cmdq_issue_cmdlist(smmu, &smmu->cmdq, &cmd_nsnh, 1, true);
+
+	/*
+	 * No need to drain the CMDQ: the invalidations above are synced, no
+	 * other submitters are left at shutdown and the incoming kernel
+	 * invalidates everything again.
+	 * TODO: Quiesce the CMDQV VCMDQs assigned to guests.
+	 */
+
+	/* Disable the queues, leaving SMMUEN set for the preserved masters */
+	cr0 = readl_relaxed(smmu->base + ARM_SMMU_CR0);
+	cr0 &= ~(CR0_CMDQEN | CR0_EVTQEN | CR0_PRIQEN);
+	ret = arm_smmu_write_reg_sync(smmu, cr0, ARM_SMMU_CR0, ARM_SMMU_CR0ACK);
+	if (ret)
+		dev_err(smmu->dev, "failed to disable queues\n");
+	return ret;
 }
 
 static int arm_smmu_liveupdate_restore_strtab_2lvl(struct arm_smmu_device *smmu,
