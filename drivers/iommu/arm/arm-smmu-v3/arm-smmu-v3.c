@@ -4772,6 +4772,10 @@ static int arm_smmu_init_strtab(struct arm_smmu_device *smmu)
 	    !arm_smmu_kdump_adopt_strtab(smmu))
 		return 0;
 
+	ret = arm_smmu_liveupdate_restore_strtab(smmu);
+	if (ret != -ENOENT)
+		return ret;
+
 	if (smmu->features & ARM_SMMU_FEAT_2_LVL_STRTAB)
 		ret = arm_smmu_init_strtab_2lvl(smmu);
 	else

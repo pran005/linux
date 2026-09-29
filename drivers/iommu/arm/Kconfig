@@ -113,7 +113,7 @@ config ARM_SMMU_V3_IOMMUFD
 
 # Common helpers for a kexec'd kernel, e.g. kdump adoption and live update
 config ARM_SMMU_V3_KEXEC
-	def_bool CRASH_DUMP
+	def_bool CRASH_DUMP || IOMMU_LIVEUPDATE
 
 config ARM_SMMU_V3_KUNIT_TEST
 	tristate "KUnit tests for arm-smmu-v3 driver"  if !KUNIT_ALL_TESTS

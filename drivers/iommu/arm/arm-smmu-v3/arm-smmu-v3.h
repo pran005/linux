@@ -1208,6 +1208,12 @@ void arm_smmu_unpreserve_device(struct device *dev,
 				struct iommu_device_ser *device_ser);
 void arm_smmu_unpreserve(struct iommu_device *iommu,
 			 struct iommu_hw_ser *iommu_ser);
+int arm_smmu_liveupdate_restore_strtab(struct arm_smmu_device *smmu);
+#else
+static inline int arm_smmu_liveupdate_restore_strtab(struct arm_smmu_device *smmu)
+{
+	return -ENOENT;
+}
 #endif
 
 static inline void arm_smmu_domain_free(struct arm_smmu_domain *smmu_domain)

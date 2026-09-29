@@ -429,4 +429,146 @@ void arm_smmu_unpreserve(struct iommu_device *iommu,
 		arm_smmu_unpreserve_strtab_linear(smmu, iommu_ser);
 }
 
+static int arm_smmu_liveupdate_restore_strtab_2lvl(struct arm_smmu_device *smmu,
+						   struct iommu_hw_ser *iommu_ser,
+						   u32 cfg_reg, phys_addr_t base)
+{
+	struct arm_smmu_strtab_cfg *cfg = &smmu->strtab_cfg;
+	u32 num_l1_ents, i;
+	u64 *l2_states;
+	int ret;
+
+	if (!iommu_ser->smmuv3.l2_strtab_lu_states_phys)
+		return -EINVAL;
+	l2_states = phys_to_virt(iommu_ser->smmuv3.l2_strtab_lu_states_phys);
+
+	ret = arm_smmu_kexec_parse_strtab_2lvl(smmu, cfg_reg, base,
+					       &num_l1_ents);
+	if (ret)
+		goto out_free_states;
+	cfg->l2.num_l1_ents = num_l1_ents;
+
+	ret = -ENOMEM;
+	cfg->l2.l1tab = dmam_restore_coherent_allocation(smmu->dev,
+			num_l1_ents * sizeof(*cfg->l2.l1tab), &cfg->l2.l1_dma,
+			GFP_KERNEL, iommu_ser->smmuv3.l1_strtab_lu_state);
+	if (!cfg->l2.l1tab)
+		goto out_free_states;
+
+	cfg->l2.l2ptrs = devm_kcalloc(smmu->dev, num_l1_ents,
+				      sizeof(*cfg->l2.l2ptrs), GFP_KERNEL);
+	if (!cfg->l2.l2ptrs)
+		goto out_free_states;
+
+	/* The outgoing .shutdown cleared the L1 STDs of unpreserved L2 tables */
+	for (i = 0; i < num_l1_ents; i++) {
+		u64 l1_desc = le64_to_cpu(cfg->l2.l1tab[i].l2ptr);
+		phys_addr_t l2_base;
+		dma_addr_t l2_dma;
+
+		ret = arm_smmu_kexec_check_strtab_l1_desc(smmu, l1_desc, i,
+							  &l2_base);
+		if (ret == 1)
+			continue;
+		if (ret)
+			goto out_free_states;
+
+		if (!l2_states[i]) {
+			dev_err(smmu->dev, "L1[%u] has no preserved L2 table\n",
+				i);
+			ret = -EINVAL;
+			goto out_free_states;
+		}
+
+		l2_dma = l2_base;
+		cfg->l2.l2ptrs[i] = dmam_restore_coherent_allocation(smmu->dev,
+				sizeof(*cfg->l2.l2ptrs[i]), &l2_dma, GFP_KERNEL,
+				l2_states[i]);
+		if (!cfg->l2.l2ptrs[i]) {
+			ret = -ENOMEM;
+			goto out_free_states;
+		}
+	}
+	ret = 0;
+
+out_free_states:
+	kho_restore_free(l2_states);
+	return ret;
+}
+
+static int
+arm_smmu_liveupdate_restore_strtab_linear(struct arm_smmu_device *smmu,
+					  struct iommu_hw_ser *iommu_ser,
+					  u32 cfg_reg, phys_addr_t base)
+{
+	struct arm_smmu_strtab_cfg *cfg = &smmu->strtab_cfg;
+	u32 num_ents;
+	int ret;
+
+	ret = arm_smmu_kexec_parse_strtab_linear(smmu, cfg_reg, base,
+						 &num_ents);
+	if (ret)
+		return ret;
+	cfg->linear.num_ents = num_ents;
+
+	cfg->linear.table = dmam_restore_coherent_allocation(smmu->dev,
+			num_ents * sizeof(*cfg->linear.table),
+			&cfg->linear.ste_dma, GFP_KERNEL,
+			iommu_ser->smmuv3.l1_strtab_lu_state);
+	if (!cfg->linear.table)
+		return -ENOMEM;
+	return 0;
+}
+
+/*
+ * Take over the stream table left programmed by the previous kernel and
+ * reserve the ASIDs/VMIDs used by the preserved STEs. Returns -ENOENT if
+ * nothing was preserved for this SMMU.
+ */
+int arm_smmu_liveupdate_restore_strtab(struct arm_smmu_device *smmu)
+{
+	u32 cfg_reg = readl_relaxed(smmu->base + ARM_SMMU_STRTAB_BASE_CFG);
+	u64 base_reg = readq_relaxed(smmu->base + ARM_SMMU_STRTAB_BASE);
+	bool is_2lvl = smmu->features & ARM_SMMU_FEAT_2_LVL_STRTAB;
+	phys_addr_t base = base_reg & STRTAB_BASE_ADDR_MASK;
+	u32 fmt = FIELD_GET(STRTAB_BASE_CFG_FMT, cfg_reg);
+	struct iommu_hw_ser *iommu_ser;
+	int ret;
+
+	iommu_ser = iommu_get_preserved_data(smmu->base_phys, IOMMU_ARM_SMMUV3);
+	if (!iommu_ser)
+		return -ENOENT;
+
+	if (cfg_reg != iommu_ser->smmuv3.strtab_base_cfg) {
+		dev_err(smmu->dev, "STRTAB_BASE_CFG changed across live update\n");
+		return -EINVAL;
+	}
+
+	/* The preserving kernel always uses a 2-level table when supported */
+	if (fmt == STRTAB_BASE_CFG_FMT_2LVL && is_2lvl)
+		ret = arm_smmu_liveupdate_restore_strtab_2lvl(smmu, iommu_ser,
+							      cfg_reg, base);
+	else if (fmt == STRTAB_BASE_CFG_FMT_LINEAR && !is_2lvl)
+		ret = arm_smmu_liveupdate_restore_strtab_linear(smmu, iommu_ser,
+								cfg_reg, base);
+	else
+		ret = -EINVAL;
+	if (ret) {
+		dev_err(smmu->dev, "failed to restore stream table: %d\n", ret);
+		return ret;
+	}
+
+	/* Keep new domains off the ASIDs/VMIDs used by the preserved STEs */
+	ret = arm_smmu_kexec_scan_and_resv_ids(smmu);
+	if (ret) {
+		dev_err(smmu->dev, "failed to reserve in-use ASIDs/VMIDs\n");
+		arm_smmu_kexec_unresv_ids(smmu);
+		return ret;
+	}
+
+	dev_info(smmu->dev, "restored preserved %s stream table\n",
+		 is_2lvl ? "2-level" : "linear");
+	return 0;
+}
+
 #endif
