@@ -3838,6 +3838,12 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev,
 	 */
 	mutex_lock(&arm_smmu_asid_lock);
 
+	ret = arm_smmu_liveupdate_attach_restored(master, smmu_domain);
+	if (ret) {
+		mutex_unlock(&arm_smmu_asid_lock);
+		return ret;
+	}
+
 	ret = arm_smmu_attach_prepare(&state, domain);
 	if (ret) {
 		mutex_unlock(&arm_smmu_asid_lock);

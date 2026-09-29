@@ -273,6 +273,11 @@ int arm_smmu_preserve_device(struct device *dev,
 	/* Link this master to the preserved IOMMU domain in the ABI */
 	device_ser->domain_iommu_ser.domain_phys = virt_to_phys(domain_ser);
 
+	/* Record the ASID/VMID for the incoming kernel to cross-check */
+	device_ser->domain_iommu_ser.attachment_id =
+		smmu_domain->stage == ARM_SMMU_DOMAIN_S1 ?
+			smmu_domain->cd.asid : smmu_domain->s2_cfg.vmid;
+
 	/* If it's not Stage-1, or the CD table isn't allocated, we're done */
 	if (smmu_domain->stage != ARM_SMMU_DOMAIN_S1 ||
 	    !arm_smmu_cdtab_allocated(&master->cd_table))
@@ -779,6 +784,116 @@ out_free_states:
 	if (l2_states)
 		kho_restore_free(l2_states);
 	return ret;
+}
+
+/* Hand over the reserved ASID/VMID, releasing the never programmed one */
+static int arm_smmu_liveupdate_inherit_id(struct arm_smmu_domain *smmu_domain,
+					  u32 id)
+{
+	struct arm_smmu_device *smmu = smmu_domain->smmu;
+	int ret;
+
+	if (smmu_domain->stage == ARM_SMMU_DOMAIN_S1) {
+		if (smmu_domain->cd.asid == id)
+			return 0;
+
+		/* Only a reserved entry, which loads as NULL, can be taken */
+		if (xa_load(&smmu->asid_map, id))
+			return -EBUSY;
+		ret = xa_err(xa_store(&smmu->asid_map, id, smmu_domain,
+				      GFP_KERNEL));
+		if (ret)
+			return ret;
+		xa_erase(&smmu->asid_map, smmu_domain->cd.asid);
+		smmu_domain->cd.asid = id;
+		return 0;
+	}
+
+	if (smmu_domain->s2_cfg.vmid == id)
+		return 0;
+
+	/* The vmid_map already holds @id, simply transfer its ownership */
+	ida_free(&smmu->vmid_map, smmu_domain->s2_cfg.vmid);
+	smmu_domain->s2_cfg.vmid = id;
+	return 0;
+}
+
+/*
+ * Inherit the live ASID/VMID of a restored master, after checking that
+ * @smmu_domain matches its live translation. Called before
+ * arm_smmu_attach_prepare() builds the invalidation array.
+ */
+int arm_smmu_liveupdate_attach_restored(struct arm_smmu_master *master,
+					struct arm_smmu_domain *smmu_domain)
+{
+	struct iommu_device_ser *dev_ser = dev_iommu_restored_state(master->dev);
+	struct arm_smmu_device *smmu = master->smmu;
+	struct pt_iommu_armv8_hw_info info;
+	struct arm_smmu_ste *ste;
+	u64 ste0, ttb, live_ttb;
+	u32 id;
+
+	lockdep_assert_held(&arm_smmu_asid_lock);
+
+	if (!dev_ser || !iommu_domain_restored_state(&smmu_domain->domain))
+		return 0;
+
+	ste = arm_smmu_get_step_for_sid(smmu, master->streams[0].id);
+	ste0 = le64_to_cpu(ste->data[0]);
+	if (!(ste0 & STRTAB_STE_0_V))
+		return 0;
+
+	pt_iommu_armv8_hw_info(&smmu_domain->armv8pt, &info);
+
+	switch (FIELD_GET(STRTAB_STE_0_CFG, ste0)) {
+	case STRTAB_STE_0_CFG_S1_TRANS: {
+		struct arm_smmu_cd *cdptr;
+		u64 cd0;
+
+		if (smmu_domain->stage != ARM_SMMU_DOMAIN_S1)
+			goto err_mismatch;
+
+		cdptr = arm_smmu_get_cd_ptr(master, IOMMU_NO_PASID);
+		if (!cdptr)
+			goto err_mismatch;
+
+		cd0 = le64_to_cpu(cdptr->data[0]);
+		if (!(cd0 & CTXDESC_CD_0_V))
+			goto err_mismatch;
+
+		id = FIELD_GET(CTXDESC_CD_0_ASID, cd0);
+		live_ttb = le64_to_cpu(cdptr->data[1]) & CTXDESC_CD_1_TTB0_MASK;
+		ttb = info.ttb & CTXDESC_CD_1_TTB0_MASK;
+		break;
+	}
+	case STRTAB_STE_0_CFG_S2_TRANS:
+		if (smmu_domain->stage != ARM_SMMU_DOMAIN_S2)
+			goto err_mismatch;
+
+		id = FIELD_GET(STRTAB_STE_2_S2VMID, le64_to_cpu(ste->data[2]));
+		live_ttb = le64_to_cpu(ste->data[3]) & STRTAB_STE_3_S2TTB_MASK;
+		ttb = info.ttb & STRTAB_STE_3_S2TTB_MASK;
+		break;
+	default:
+		/* Nothing to inherit, nested STEs aren't restored (yet) */
+		return 0;
+	}
+
+	if (live_ttb != ttb || id != dev_ser->domain_iommu_ser.attachment_id)
+		goto err_mismatch;
+
+	/* A shared restored domain inherits its ID on the first attach */
+	if (!list_empty(&smmu_domain->devices) &&
+	    id != (smmu_domain->stage == ARM_SMMU_DOMAIN_S1 ?
+		   smmu_domain->cd.asid : smmu_domain->s2_cfg.vmid))
+		goto err_mismatch;
+
+	return arm_smmu_liveupdate_inherit_id(smmu_domain, id);
+
+err_mismatch:
+	dev_err(master->dev,
+		"restored domain doesn't match the live translation\n");
+	return -EINVAL;
 }
 
 #endif
