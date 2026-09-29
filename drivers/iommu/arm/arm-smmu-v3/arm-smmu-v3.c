@@ -5048,6 +5048,13 @@ static void arm_smmu_write_strtab(struct arm_smmu_device *smmu)
 	writel_relaxed(reg, smmu->base + ARM_SMMU_STRTAB_BASE_CFG);
 }
 
+/* Adopted by kdump or restored by LU (a failed restore fails the probe) */
+static bool arm_smmu_strtab_is_live(struct arm_smmu_device *smmu)
+{
+	return (smmu->options & ARM_SMMU_OPT_KDUMP_ADOPT) ||
+	       iommu_get_preserved_data(smmu->base_phys, IOMMU_ARM_SMMUV3);
+}
+
 static int arm_smmu_device_reset(struct arm_smmu_device *smmu)
 {
 	int ret;
@@ -5064,10 +5071,11 @@ static int arm_smmu_device_reset(struct arm_smmu_device *smmu)
 	 * According to spec, updating STRTAB_BASE/CR1/CR2 when CR0_SMMUEN=1 is
 	 * CONSTRAINED UNPREDICTABLE. So, skip those register updates and rely
 	 * on the adopted stream table from the crashed kernel.
+	 * Same for a Live Update restore.
 	 */
-	if (smmu->options & ARM_SMMU_OPT_KDUMP_ADOPT) {
-		dev_info(smmu->dev,
-			 "kdump: retaining SMMUEN for in-flight DMA\n");
+	if (arm_smmu_strtab_is_live(smmu)) {
+		dev_info(smmu->dev, "%s: retaining SMMUEN for in-flight DMA\n",
+			 is_kdump_kernel() ? "kdump" : "live update");
 		enables = reg & ~(CR0_CMDQEN | CR0_EVTQEN | CR0_PRIQEN);
 		goto reset_queues;
 	}
@@ -5103,7 +5111,7 @@ static int arm_smmu_device_reset(struct arm_smmu_device *smmu)
 	arm_smmu_write_strtab(smmu);
 
 reset_queues:
-	if (smmu->options & ARM_SMMU_OPT_KDUMP_ADOPT) {
+	if (arm_smmu_strtab_is_live(smmu)) {
 		/*
 		 * Disable queues since arm_smmu_device_disable() was skipped.
 		 * CR0 fields are independent per spec, so the queue enable bits
@@ -5122,8 +5130,9 @@ reset_queues:
 	 * errors would be visible. Ack everything prior to re-enabling the CMDQ
 	 * as a stale CMDQ_ERR would halt the CMDQ and new command will timeout.
 	 * Acking SFM_ERR is defined too, although it would not exit the SFM.
+	 * Same for a Live Update, as the outgoing kernel masked the interrupts.
 	 */
-	if (is_kdump_kernel()) {
+	if (is_kdump_kernel() || arm_smmu_strtab_is_live(smmu)) {
 		u32 gerror = readl_relaxed(smmu->base + ARM_SMMU_GERROR);
 		u32 gerrorn = readl_relaxed(smmu->base + ARM_SMMU_GERRORN);
 
@@ -5193,10 +5202,10 @@ reset_queues:
 	}
 
 	/*
-	 * In a kdump adopt case, retain the crashed kernel's ATS-check policy
-	 * captured above rather than forcing it on.
+	 * In a kdump adopt or a Live Update restore case, retain the previous
+	 * kernel's ATS-check policy captured above rather than forcing it on.
 	 */
-	if (!(smmu->options & ARM_SMMU_OPT_KDUMP_ADOPT) &&
+	if (!arm_smmu_strtab_is_live(smmu) &&
 	    (smmu->features & ARM_SMMU_FEAT_ATS)) {
 		enables |= CR0_ATSCHK;
 		ret = arm_smmu_write_reg_sync(smmu, enables, ARM_SMMU_CR0,
@@ -5722,8 +5731,10 @@ static void arm_smmu_rmr_install_bypass_ste(struct arm_smmu_device *smmu)
 	 * Kdump adoption keeps the crashed kernel's table live. Rewriting the
 	 * adopted STE here could expose an in-flight fetch to a transient V=0
 	 * entry, or change Cfg=translate to Cfg=bypass. Must skip here.
+	 * Same for a Live Update restore.
+	 * TODO: Re-install the bypass STEs of the unpreserved RMR SIDs.
 	 */
-	if (smmu->options & ARM_SMMU_OPT_KDUMP_ADOPT)
+	if (arm_smmu_strtab_is_live(smmu))
 		return;
 
 	INIT_LIST_HEAD(&rmr_list);
